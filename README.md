@@ -230,6 +230,25 @@ Isi EDA: frekuensi dan kelengkapan, intermittency (ADI/CV²), transformasi targe
 
 ---
 
+## Tipe Target yang Didukung
+
+Berlaku untuk pipeline **tabular**, **multimodal**, dan **NLP**.
+
+| Tipe | Cara set | Metrik default | Aturan keputusan yang di-tune di OOF |
+|---|---|---|---|
+| Regresi | otomatis (angka dengan > 20 nilai unik) | RMSE | - |
+| Biner | otomatis | ROC AUC (tabular), macro F1 (NLP) | threshold, kalau metrik berbasis label (`'f1'`, `'accuracy'`, ...) |
+| Multiclass | otomatis | macro F1 | skala per kelas: `argmax(p × s)`, mendongkrak macro F1 di data imbalance |
+| **Ordinal** (rating 1–5, rendah/sedang/tinggi) | `TASK = 'ordinal'` atau `METRIC = 'qwk'`. Label string pakai `ORDINAL_ORDER = ['rendah', 'sedang', 'tinggi']` | QWK | cut-point antar kelas (model dilatih sebagai regresi di urutan kelas) |
+| **Multi-label** (satu baris bisa banyak label) | `MULTILABEL_SEP = '|'` kalau satu kolom berisi `"a|b"`, atau `LABEL_COL` / `TARGET` = list kolom 0/1 | F1 per label (tabular), micro F1 (NLP) | threshold per label |
+| **Multi-target** (beberapa kolom target, tabular) | `TARGET = ['y1', 'y2']`, atau otomatis kalau `sample_submission` punya > 1 kolom target | per target | per target |
+
+- `TUNE_DECISION = True` (default) mengaktifkan tuning di atas. Tuning **hanya pakai prediksi out-of-fold**, lalu dinilai sekali di holdout, jadi skornya tetap jujur.
+- Multi-target di tabular: target pertama dapat analisis lengkap (SHAP, error analysis). Target berikutnya pakai fitur dan fold yang sama, dengan baseline, GBM, blend, dan aturan keputusan masing-masing. Hasilnya `multi_target_metrics.csv`, plus `multilabel_scores.json` (micro / macro / samples F1) untuk multi-label.
+- Format `submission.csv` tetap mengikuti `sample_submission`. Untuk multi-label satu kolom, label digabung lagi dengan separator yang sama.
+
+---
+
 ## Multimodal (Tabular + Teks)
 
 Untuk tabel yang punya kolom angka/kategori **dan** kolom teks bebas (deskripsi produk, ulasan, keluhan, iklan lowongan). Isinya sama dengan notebook tabular, ditambah:

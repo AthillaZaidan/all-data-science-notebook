@@ -12,6 +12,7 @@ Jadi alurnya selalu **EDA dulu, baru pipeline**. Semua keputusan pipeline (metri
 | Tabular | [`tabular/eda_tabular.ipynb`](tabular/eda_tabular.ipynb) | [`tabular/pipeline_tabular.ipynb`](tabular/pipeline_tabular.ipynb) | Linear / Logistic Regression | LightGBM, XGBoost, CatBoost (+ Optuna) |
 | NLP | [`nlp/eda_nlp.ipynb`](nlp/eda_nlp.ipynb) | [`nlp/pipeline_nlp.ipynb`](nlp/pipeline_nlp.ipynb) | TF-IDF (word + char) + Linear | IndoBERT, RoBERTa, DeBERTa-v3, ModernBERT, XLM-R, mDeBERTa, dll. |
 | Forecasting | [`forecasting/eda_forecasting.ipynb`](forecasting/eda_forecasting.ipynb) | [`forecasting/pipeline_forecasting.ipynb`](forecasting/pipeline_forecasting.ipynb) | Naive, Seasonal Naive, Moving Average, ETS | LightGBM, XGBoost, CatBoost (global model) |
+| Multimodal (tabular + teks) | [`multimodal/eda_multimodal.ipynb`](multimodal/eda_multimodal.ipynb) | [`multimodal/pipeline_multimodal.ipynb`](multimodal/pipeline_multimodal.ipynb) | Linear / Logistic Regression | LightGBM, XGBoost, CatBoost + TF-IDF, embedding transformer, stacking NLP |
 
 ---
 
@@ -226,6 +227,52 @@ Isi EDA: frekuensi dan kelengkapan, intermittency (ADI/CV²), transformasi targe
 | `BASELINES` | subset dari `['naive', 'seasonal_naive', 'moving_average', 'ets']` |
 | `OBJECTIVE`, `WEIGHT_BY_VOLUME`, `NON_NEGATIVE` | `'auto'` = dari EDA (misal Tweedie untuk data intermittent) |
 | `INTERVAL` | tingkat prediction interval empiris (default 0.8) |
+
+---
+
+## Multimodal (Tabular + Teks)
+
+Untuk tabel yang punya kolom angka/kategori **dan** kolom teks bebas (deskripsi produk, ulasan, keluhan, iklan lowongan). Isinya sama dengan notebook tabular, ditambah:
+
+**EDA (`eda_multimodal.ipynb`)**: section 15 **Modality Signal Check** membandingkan skor out-of-fold dari:
+- naive (tebak rata-rata atau kelas mayoritas)
+- teks saja (TF-IDF + model linear, per kolom teks)
+- tabular saja (gradient boosting)
+- tabular + teks
+
+Selisih "tabular + teks" dengan "tabular saja" jadi dasar rekomendasi `text_mode` di `eda_decisions.json`:
+
+| Kondisi | `text_mode` |
+|---|---|
+| Teks menambah skor dengan jelas | `'both'` |
+| Teks menambah sedikit | `'tfidf'` |
+| Teks tidak punya sinyal | `'none'` |
+
+**Pipeline (`pipeline_multimodal.ipynb`)**
+
+| Setting | Isi |
+|---|---|
+| `TEXT_MODE` | `'tfidf'` (TF-IDF → SVD), `'embed'` (embedding transformer → PCA), `'both'`, `'none'`, atau `'auto'` (ikut EDA; kalau tidak ada, `'both'` saat ada GPU atau datanya kecil) |
+| `EMBED_MODEL` | encoder Hugging Face, default `intfloat/multilingual-e5-base` (Indonesia + Inggris). Alternatif: `indobenchmark/indobert-base-p1`, `sentence-transformers/all-MiniLM-L6-v2` |
+| `EMBED_DIM` | jumlah komponen PCA per kolom teks (default 32) |
+| `NLP_OOF_DIR` | folder `pipeline-output/final` dari pipeline NLP. Prediksi OOF model BERT jadi fitur `nlp_*` (stacking) |
+| `MODALITY_ABLATION` | latih ulang model pertama dengan fitur tabular saja, + tiap keluarga fitur teks, teks saja, dan semua. Hasilnya `modality_ablation.csv` + grafik |
+
+Embedding dihitung sekali per teks unik lalu di-cache di `pipeline-output/cache/`, jadi run kedua langsung cepat.
+
+### Alur stacking dengan model NLP fine-tuned
+
+1. Jalankan `nlp/pipeline_nlp.ipynb` di data yang sama, dengan `TEXT_COL` = kolom teks, `LABEL_COL` = target, `ID_COL` = kolom ID, dan **`TRAIN_FOLDS = [0, 1, 2, 3, 4]`**. Semua fold wajib dilatih supaya tiap baris punya prediksi out-of-fold. Kalau tidak, stacking-nya bocor dan notebook akan memberi peringatan.
+2. Di `pipeline_multimodal.ipynb`, set `NLP_OOF_DIR = '../nlp/pipeline-output/final'`.
+3. Prediksi digabung lewat kolom ID yang sama. Tabel ablation menunjukkan seberapa besar tambahan dari model NLP.
+
+### Bagaimana dengan forecasting + teks?
+
+Belum ada notebook khusus, tapi polanya:
+
+1. **Agregasi teks ke level (series, tanggal)**: jumlah dokumen, rata-rata sentimen, proporsi topik, rata-rata embedding (dikompres PCA) per hari/minggu.
+2. **Jadikan eksogen**. Kalau teksnya baru diketahui setelah kejadian (berita, ulasan), fitur ini **harus di-lag** minimal sebesar horizon supaya tidak bocor. Kalau teksnya sudah ada di masa depan (misal deskripsi promo yang sudah dijadwalkan), masukkan sebagai kolom di file test supaya terbaca sebagai `EXOG_KNOWN`.
+3. Simpan hasil agregasi sebagai kolom tambahan di train/test, lalu jalankan `forecasting/pipeline_forecasting.ipynb` seperti biasa.
 
 ---
 

@@ -31,22 +31,38 @@ Cell `%pip install` di bagian **Initialization** menginstal semua dependency. Ka
 
 > **Catatan macOS:** LightGBM dan XGBoost butuh `libomp`. Install dengan `brew install libomp`. Kalau tidak tersedia, notebook akan melewati model tersebut dengan peringatan dan tetap jalan dengan model lain.
 
-### 2. Edit cell `Settings`
+### 2. Taruh data dan arahkan path ke folder
 
-Satu-satunya cell yang perlu diubah ada di section **2. Initialization → Settings**. Minimal ubah:
+Path data cukup diisi **folder dataset**. Notebook mencari sendiri file di dalamnya berdasarkan nama:
+
+| File | Dikenali dari nama | Dipakai untuk |
+|---|---|---|
+| Train | `train*` (kalau tidak ada: file terbesar) | data latih |
+| Test | `test*` | prediksi + `submission.csv` |
+| Sample submission | mengandung `sample` atau `submission` | template `submission.csv` (urutan ID, nama kolom, label vs probabilitas) |
 
 ```python
-KAGGLE_PATH      = '/kaggle/input/<dataset-slug>/train.csv'   # path di Kaggle
-COLAB_PATH       = '/content/drive/MyDrive/<folder>/train.csv'
-LOCAL_PATH       = 'data/train.csv'                            # path di laptop
-TEST_KAGGLE_PATH = '/kaggle/input/<dataset-slug>/test.csv'     # opsional
-TEST_LOCAL_PATH  = 'data/test.csv'                             # opsional
-READ_KWARGS      = {}                                          # misal {'sep': ';'} atau {'sheet_name': 0}
+KAGGLE_PATH = '/kaggle/input/<dataset-slug>'   # folder dataset di Kaggle
+COLAB_PATH  = '/content/drive/MyDrive/<folder>'
+LOCAL_PATH  = 'data'                           # folder data/ di samping notebook
+READ_KWARGS = {}                               # misal {'sep': ';'} atau {'sheet_name': 0}
+```
+
+- **Lokal:** taruh `train.csv`, `test.csv`, `sample_submission.csv` di `<domain>/data/` (misal `tabular/data/`), lalu Run All. Tidak perlu edit path sama sekali.
+- **Kaggle:** tambahkan dataset/kompetisi lewat *Add Input*. Kalau `KAGGLE_PATH` dibiarkan placeholder, notebook mencari di seluruh `/kaggle/input`.
+- **Path salah / tidak ada:** notebook memberi `[warn]` lalu mencari otomatis. Di lokal urutannya `data/` → `input/` → `dataset/` → folder notebook. Di Kaggle `/kaggle/input`, di Colab `/content`. Folder `eda-output/` dan `pipeline-output/` tidak ikut dicari.
+- `KAGGLE_PATH` / `LOCAL_PATH` tetap boleh diisi path file langsung (`.../train.csv`). Test dan sample submission dicari di folder yang sama. `TEST_*_PATH` hanya perlu diisi kalau nama file test-nya tidak diawali `test`.
+- Di awal notebook tercetak file mana yang dipakai:
+
+```
+train             : data/train.csv
+test              : data/test.csv
+sample submission : data/sample_submission.csv
 ```
 
 Format yang didukung: `.csv`, `.tsv`, `.parquet`, `.xlsx`/`.xls`, `.json` (NLP juga `.jsonl`).
 
-Lalu set nama kolom target dan kolom lain yang relevan (lihat bagian per domain di bawah).
+Kalau file EDA tidak ada, kolom target ditebak dari `sample_submission` (kolom keduanya), lalu dari satu-satunya kolom yang ada di train tapi tidak ada di test. Untuk notebook EDA, tetap set nama kolom target dan kolom lain yang relevan (lihat bagian per domain di bawah).
 
 ### 3. Jalankan EDA → Pipeline
 
@@ -103,6 +119,7 @@ Untuk mengunci keputusan secara manual, ganti `'auto'` dengan nilai eksplisit, m
 | `TUNE`, `TUNE_MODEL`, `N_TRIALS` | tuning Optuna (default mati) |
 | `ENSEMBLE` | blend bobot optimal dari OOF |
 | `SUBMISSION_ID` | kolom ID untuk `submission.csv` |
+| `SUBMISSION_FORMAT` | `'auto'` (ikut `sample_submission`; kalau tidak ada: probabilitas untuk ROC AUC / PR AUC / log loss, selain itu label), `'label'`, `'proba'` |
 | `USE_GPU` | `True` kalau pakai GPU Kaggle/Colab |
 
 ### Yang dibaca pipeline dari EDA
@@ -151,6 +168,7 @@ Isi EDA: kualitas teks, panjang, vocabulary, word cloud (keseluruhan, per label,
 | `TRAIN_FOLDS` | fold yang dilatih, misal `[0]` (cepat) atau `[0,1,2,3,4]` (penuh) |
 | `MIXED_PRECISION` | `'auto'` = aktif kalau ada GPU |
 | `SAVE_WEIGHTS` | simpan bobot model ke `final/models/` |
+| `ID_COL`, `SUBMISSION_FORMAT` | kolom ID di `submission.csv`; format `'auto'` / `'label'` / `'proba'` seperti di tabular |
 
 Pilihan model di `MODEL_REGISTRY`:
 
@@ -179,7 +197,7 @@ date,store,item,sales,promo
 ...
 ```
 
-Single series cukup `ID_COLS = []`. Kalau path data tidak ditemukan dan `DEMO_IF_MISSING = True`, notebook EDA membuat data demo di `demo-data/`.
+Single series cukup `ID_COLS = []`. Kalau tidak ada data sama sekali dan `DEMO_IF_MISSING = True`, notebook membuat data demo di `demo-data/`. Kalau ada `sample_submission` dengan kolom ID yang juga ada di file test (misal `id`), `submission.csv` mengikuti urutan dan nama kolomnya.
 
 ### Settings penting
 
@@ -229,7 +247,7 @@ Isi EDA: frekuensi dan kelengkapan, intermittency (ADI/CV²), transformasi targe
         ├── final_metrics.*   # skor holdout + bootstrap CI vs baseline
         ├── report.md         # ringkasan siap salin ke laporan
         ├── config.json
-        └── submission.csv    # kalau test set diberikan
+        └── submission.csv    # kalau ada file test (format mengikuti sample_submission kalau ada)
 ```
 
 Folder output tidak di-commit (`.gitignore`) karena bisa dibuat ulang dengan menjalankan notebook.

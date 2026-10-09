@@ -15,6 +15,8 @@ Jadi alurnya selalu **EDA dulu, baru pipeline**. Semua keputusan pipeline (metri
 | Multimodal: tabular + teks | [`multimodal/tabular-text/eda_multimodal.ipynb`](multimodal/tabular-text/eda_multimodal.ipynb) | [`multimodal/tabular-text/pipeline_multimodal.ipynb`](multimodal/tabular-text/pipeline_multimodal.ipynb) | Linear / Logistic Regression | LightGBM, XGBoost, CatBoost + TF-IDF, embedding transformer, stacking NLP |
 | Multimodal: forecasting + teks | [`multimodal/forecast-text/eda_forecast_text.ipynb`](multimodal/forecast-text/eda_forecast_text.ipynb) | [`multimodal/forecast-text/pipeline_forecast_text.ipynb`](multimodal/forecast-text/pipeline_forecast_text.ipynb) | Naive, Seasonal Naive, Moving Average, ETS | LightGBM, XGBoost, CatBoost + fitur teks ter-lag (embedding / TF-IDF) |
 | Tabular foundation model | pakai EDA tabular | [`tabular-foundation/pipeline_foundation.ipynb`](tabular-foundation/pipeline_foundation.ipynb) | Linear / Logistic Regression | **Causilo** (in-context learning) + LightGBM / XGBoost / CatBoost |
+| CV: klasifikasi gambar | analisis data di section 4 | [`computer-vision/classification/pipeline_cv_classification.ipynb`](computer-vision/classification/pipeline_cv_classification.ipynb) | Linear probe di fitur DINOv3 beku | **DINOv3 ViT-L/16** fine-tuning (LLRD) + blend |
+| CV: segmentasi | analisis data di section 4 | [`computer-vision/segmentation/pipeline_cv_segmentation.ipynb`](computer-vision/segmentation/pipeline_cv_segmentation.ipynb) | Linear head di patch DINOv3 beku | **DINOv3 ViT-L/16** + decoder multi-layer + blend |
 
 ---
 
@@ -377,6 +379,72 @@ Kalau tidak ada data, `DEMO_IF_MISSING = True` membuat panel penjualan demo + `n
 
 ---
 
+## Computer Vision: DINOv3 ViT-L (`computer-vision/`)
+
+Dua notebook pipeline untuk data gambar, keduanya memakai backbone **DINOv3 ViT-L/16** (`facebook/dinov3-vitl16-pretrain-lvd1689m`, 300M parameter). Tidak ada notebook EDA terpisah: section 4 (**Data Overview and Decisions**) menganalisis data lalu mengisi semua setting `'auto'` dan mencatatnya di `decisions.csv`.
+
+**Akses bobot DINOv3 (gated).** Sekali saja:
+
+1. Login ke huggingface.co, buka halaman model `facebook/dinov3-vitl16-pretrain-lvd1689m`, lalu terima lisensinya.
+2. Buat token *read* di Settings → Access Tokens.
+3. Simpan sebagai secret bernama `HF_TOKEN`:
+   - **Kaggle:** Add-ons → Secrets
+   - **Colab:** ikon kunci
+   - **Lokal:** `export HF_TOKEN=...`
+
+Jangan tempel token di notebook. Kalau bobot tidak bisa dimuat (tanpa token atau tanpa internet), notebook otomatis pindah ke `BACKBONE_FALLBACK` (`dinov2-large`, tidak gated). Peralihan ini dicatat di tabel keputusan. Untuk Kaggle offline, upload hasil `save_pretrained` sebagai dataset, lalu isi `BACKBONE` dengan path foldernya.
+
+**GPU.** Linear probe/head jalan di CPU atau Apple Silicon. Fine-tuning ViT-L butuh GPU CUDA, jadi `FINETUNE = 'auto'` hanya aktif kalau ada CUDA. Tanpa GPU, notebook tetap menghasilkan submission dari baseline.
+
+### Klasifikasi gambar (`computer-vision/classification/`)
+
+| Layout data | Contoh |
+|---|---|
+| Tabel | `train.csv` (nama file / id gambar + label), `test.csv`, `sample_submission.csv`, folder gambar bebas |
+| Folder kelas | `train/<kelas>/*.jpg`, `test/*.jpg` |
+
+- **Task:** binary, multiclass, multi-label (beberapa kolom 0/1 atau `MULTILABEL_SEP`), dan regresi (misal umur dari foto).
+- **Alur:**
+  1. **Linear probe** dengan C di-tune per fold, memakai fitur `[CLS ; mean(patch)]` yang di-cache dan pakai flip TTA.
+  2. **Fine-tuning** `UNFREEZE_LAST_N` blok terakhir dengan layer-wise LR decay, augmentasi, AMP, dan early stopping.
+  3. **Blend** keduanya.
+  4. **Tuning decision rule** di OOF: threshold, class scale, atau threshold per label.
+  5. **Evaluasi holdout**.
+- **Interpretasi:** *patch evidence map* menunjukkan kontribusi tiap patch ke logit kelas. Ini dihitung eksak dari head linear, tanpa gradien.
+- **Error analysis:** gambar dengan kesalahan paling yakin, dan pasangan kelas yang paling sering tertukar.
+
+### Segmentasi (`computer-vision/segmentation/`)
+
+| Layout data | Contoh |
+|---|---|
+| File mask | `train/images/x.jpg` + `train/masks/x_mask.png` (folder bernama `mask`/`label`/`gt`/`annot`/`seg`, atau suffix `_mask`) |
+| Tabel RLE | `train.csv` (`ImageId`, [`ClassId`], `EncodedPixels`), gaya Severstal / Carvana |
+
+- **Nilai mask dibaca otomatis:**
+  - 0/255 atau 0/1 → binary
+  - 0..K dengan 255 → 255 dianggap *ignore* (gaya VOC)
+  - mask RGB → satu kelas per warna, dengan pemetaan ke warna terdekat (tahan JPEG)
+  - banyak level abu-abu → di-threshold
+- **Override:** `MASK_VALUES`, `IGNORE_INDEX`, `CLASS_NAMES`.
+- **RLE:**
+  - Urutan piksel (`'F'` kolom, `'C'` baris) dideteksi otomatis dari bentuk mask.
+  - Tabel yang hanya berisi gambar ber-objek menambahkan gambar lain di folder yang sama sebagai mask kosong.
+- **Alur:**
+  1. **Linear head** di patch beku layer terakhir (baseline).
+  2. **Decoder multi-layer:** 4 layer DINOv3 digabung di 1/16, naik ke 1/8, lalu digabung dengan cabang CNN resolusi 1/4 untuk detail tepi. Blok terakhir di-fine-tune.
+  3. **Blend** keduanya.
+  4. **Tuning threshold + ukuran objek minimum** di OOF.
+  5. **Evaluasi holdout di resolusi asli.**
+- **Loss:** CE/BCE + Dice. Bobotnya `'auto'` dari luas foreground.
+- **Metrik:** Dice per gambar untuk binary (mask kosong yang diprediksi kosong = 1), mIoU untuk multiclass.
+- **Output:**
+  - `masks/*.png` di resolusi asli
+  - `submission.csv` dengan RLE yang mengikuti `sample_submission.csv`: satu baris per gambar, per (gambar, kelas), atau id gabungan `gambar_kelas`
+  - tanpa sample: `id, rle` (binary) atau `id, class, rle` (multiclass)
+  - string mask kosong diatur lewat `EMPTY_RLE`
+
+---
+
 ## Output
 
 ```
@@ -425,6 +493,6 @@ Perubahan kecil untuk satu lomba (misal path dan nama kolom) cukup diedit langsu
 ## Tips Lomba
 
 - **Jalankan EDA dulu.** Tanpa EDA, pipeline tetap jalan tapi keputusan hanya berbasis heuristik, dan tabel keputusan tidak punya bukti untuk laporan.
-- **Uji cepat dulu:** untuk NLP set `DEBUG_SAMPLE = 2000` dan `MODELS = ['bert-tiny']`; untuk tabular set `MODELS = ['lightgbm']` dan `TUNE = False`.
+- **Uji cepat dulu:** untuk NLP set `DEBUG_SAMPLE = 2000` dan `MODELS = ['bert-tiny']`; untuk tabular set `MODELS = ['lightgbm']` dan `TUNE = False`; untuk CV set `BACKBONE = 'dinov3-vits16'`, `DEBUG_SAMPLE = 500`, dan `EPOCHS = 2`.
 - **Selalu bandingkan dengan baseline.** `final_metrics` memuat improvement vs baseline beserta bootstrap 95% CI, jadi kamu bisa bilang apakah peningkatannya signifikan.
 - **Ambil isi laporan dari `report.md` dan `eda_summary.md`**, lalu pilih grafik dari `figures/`.

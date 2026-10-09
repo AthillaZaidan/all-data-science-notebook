@@ -93,7 +93,7 @@ cells.append(md(
     "when that file does not exist.*\n\n"
     "| Setting | Purpose | Example |\n"
     "|---|---|---|\n"
-    "| `KAGGLE_PATH` / `COLAB_PATH` / `LOCAL_PATH`, `TEST_*_PATH` | Training file and optional unlabeled test file | `'/kaggle/input/comp/train.csv'` |\n"
+    "| `KAGGLE_PATH` / `COLAB_PATH` / `LOCAL_PATH`, `TEST_*_PATH` | Training file and optional unlabeled test file | `'/kaggle/input/comp'` (folder) or a file path |\n"
     "| `TEXT_COL`, `TEXT_PAIR_COL`, `LABEL_COL` | Text, optional second text, target | `'review'`, `None`, `'sentiment'` |\n"
     "| `EDA_DIR` | Folder with `eda_decisions.json` | `'eda-output'` |\n"
     "| `TASK`, `ORDINAL_ORDER`, `MULTILABEL_SEP` | `'auto'`, `'classification'`, `'regression'`, `'ordinal'` (QWK), or `'multilabel'`; class order for ordinal strings; separator when one column holds several labels (or pass a list of 0/1 columns as `LABEL_COL`) | `'ordinal'`, `['low', 'mid', 'high']`, `'|'` |\n"
@@ -132,19 +132,18 @@ cells.append(md(
 ))
 
 cells.append(md(
-    "## Dataset\n\n"
-    "*The demo uses the lyrics of the DAC PRS ITS 2025 dataset with `track_genre` as the label, "
-    "restricted to the most frequent genres through `TOP_K_CLASSES`. Replace the paths and columns "
-    "with the competition data on the day.*\n\n"
-    "```\n"
-    "referensi/\n"
-    "└── data.csv\n"
-    "     ├── lyrics        (text)\n"
-    "     └── track_genre   (label)\n"
+    "## Dataset\n"
     "\n"
-    "eda-output/\n"
-    "└── eda_decisions.json   (written by eda_nlp.ipynb)\n"
-    "```"
+    "*Any text dataset works: one document per row, a text column, and optionally a label (a class, a numeric score, ordered levels, or several labels per document). Put the files in `data/` next to this notebook, or point `KAGGLE_PATH` / `COLAB_PATH` / `LOCAL_PATH` at the dataset folder.*\n"
+    "\n"
+    "```\n"
+    "data/\n"
+    "├── train.csv              (text + label)\n"
+    "├── test.csv               (text only, optional)\n"
+    "└── sample_submission.csv  (id + target columns, optional)\n"
+    "```\n"
+    "\n"
+    "*With `'auto'` the text column is the string column with the longest documents and the label comes from `sample_submission.csv` (or is the only train column missing from the test file). Set `TEXT_COL` and `LABEL_COL` explicitly whenever the guess is wrong.*"
 ))
 
 cells.append(md(
@@ -297,7 +296,7 @@ cells.append(code(
     "    TEXT_COL      = 'auto'\n"
     "    TEXT_PAIR_COL = None\n"
     "    LABEL_COL     = 'auto'\n"
-    "    ID_COL        = 'track_id'\n"
+    "    ID_COL        = 'auto'\n"
     "    SUBMISSION_FORMAT = 'auto'\n"
     "    TASK          = 'auto'\n"
     "    ORDINAL_ORDER = None\n"
@@ -467,6 +466,12 @@ cells.append(code(
     "raw = load_table(DATA_PATH, **CFG.READ_KWARGS)\n"
     "raw_test = load_table(TEST_PATH, **CFG.READ_KWARGS) if TEST_PATH else None\n"
     "SAMPLE = load_table(SAMPLE_PATH) if SAMPLE_PATH else None\n"
+    "if CFG.ID_COL == 'auto':\n"
+    "    # the sample_submission id column, else a column named like an identifier\n"
+    "    ID_NAME = re.compile(r'(^id$|_id$|^id_|^key$|_key$)', re.I)\n"
+    "    first = SAMPLE.columns[0] if SAMPLE is not None and SAMPLE.columns[0] in raw.columns else None\n"
+    "    CFG.ID_COL = first or next((c for c in raw.columns if ID_NAME.search(str(c))), None)\n"
+    "    print(f'[info] ID_COL auto-selected: {CFG.ID_COL}')\n"
     "print(f'Train: {raw.shape[0]:,} rows x {raw.shape[1]} cols' + (f' | Test: {raw_test.shape[0]:,} rows' if raw_test is not None else ''))"
 ))
 

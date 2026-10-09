@@ -92,7 +92,7 @@ cells.append(md(
     "*Everything is controlled from the `Settings` class in section 2. Nothing else needs editing.*\n\n"
     "| Setting | Purpose | Example |\n"
     "|---|---|---|\n"
-    "| `KAGGLE_PATH` / `COLAB_PATH` / `LOCAL_PATH` | Training file per environment (auto-detected) | `'/kaggle/input/comp/train.csv'` |\n"
+    "| `KAGGLE_PATH` / `COLAB_PATH` / `LOCAL_PATH` | Training file per environment (auto-detected) | `'/kaggle/input/comp'` (folder) or a file path |\n"
     "| `TEST_*_PATH` | Optional unlabeled test file, used to write `submission.csv` | `'.../test.csv'` or `None` |\n"
     "| `SUBMISSION_FORMAT` | `'label'`, `'proba'` (positive-class probability, or one column per class), or `'auto'` (probabilities for ROC AUC, PR AUC, and log loss) | `'auto'` |\n"
     "| `EDA_DIR` | Folder with `eda_decisions.json` from the multimodal EDA; every `'auto'` setting below reads it | `'eda-output'` |\n"
@@ -126,21 +126,18 @@ cells.append(md(
 ))
 
 cells.append(md(
-    "## Dataset\n\n"
-    "*Any table with a target and at least one free-text column works. Text columns are detected "
-    "automatically (strings averaging six or more words) or listed in `TEXT_COLS`. The example below "
-    "is the DAC PRS ITS 2025 final dataset, which pairs audio features with full lyrics.*\n\n"
-    "*The demo dataset contains 35,230 Spotify tracks with audio features, lyrics, genre, release "
-    "year, and a 0-100 popularity score. The same `track_id` appears in several genres, so a "
-    "group split on `track_id` is used to prevent leakage.*\n\n"
-    "**Attributes**\n\n"
-    "1.  `track_id`, `track_name`, `artists` : Track identifiers and metadata\n"
-    "2.  `danceability` ... `tempo`, `duration_ms` : Spotify audio features\n"
-    "3.  `track_genre`                     : Genre label (43 levels)\n"
-    "4.  `release_year`                    : Year of release\n"
-    "5.  `lyrics`                          : Full lyrics text\n\n"
-    "**Target**\n"
-    " `popularity`       : Popularity score from 0 to 100"
+    "## Dataset\n"
+    "\n"
+    "*Any table that mixes structured columns with free text works: product listings with descriptions, reviews with ratings and metadata, tickets with categories and complaint text. Put the files in `data/` next to this notebook, or point `KAGGLE_PATH` / `COLAB_PATH` / `LOCAL_PATH` at the dataset folder.*\n"
+    "\n"
+    "```\n"
+    "data/\n"
+    "├── train.csv              (structured + text columns + target)\n"
+    "├── test.csv               (same columns without the target, optional)\n"
+    "└── sample_submission.csv  (id + target columns, optional)\n"
+    "```\n"
+    "\n"
+    "*Text columns are detected automatically (strings averaging six or more words) or listed in `TEXT_COLS`. The target is taken from `sample_submission.csv` (or as the only train column missing from the test file) when `TARGET = 'auto'`.*"
 ))
 
 cells.append(md(
@@ -179,7 +176,7 @@ cells.append(section("Initialization", "2"))
 cells.append(md(
     "## Environment Setup\n\n"
     "The pipeline runs on CPU. A GPU is only used by the boosting libraries when `USE_GPU = True`. "
-    "Recorded runtime on the demo dataset with all three boosting models and no tuning is a few "
+    "Runtime with all three boosting models and no tuning is a few "
     "minutes on a Kaggle CPU session."
 ))
 
@@ -682,7 +679,9 @@ cells.append(code(
     "T = TARGETS[0]\n"
     "missing_targets = [t for t in TARGETS if t not in df_raw.columns]\n"
     "assert not missing_targets, f'TARGET {missing_targets} not found. Columns: {list(df_raw.columns)}'\n"
-    "ID_LIST = [c for c in decide('ID_COLS', CFG.ID_COLS, 'id_cols', lambda: [], 'near-unique identifier columns') if c in df_raw.columns]\n"
+    "ID_NAME = re.compile(r'(^id$|_id$|^id_|^key$|_key$)', re.I)\n"
+    "ID_LIST = [c for c in decide('ID_COLS', CFG.ID_COLS, 'id_cols', lambda: [c for c in df_raw.columns if c not in TARGETS and ID_NAME.search(str(c))],\n"
+    "                             'identifier columns (EDA, else recognised by name)') if c in df_raw.columns]\n"
     "CV_GROUP = decide('CV_GROUP', CFG.CV_GROUP, 'cv_group', lambda: None,\n"
     "                  lambda v: 'identifier repeated across rows, so copies must share a fold' if v else 'no repeated identifier found')\n"
     "CV_GROUP = CV_GROUP if CV_GROUP in df_raw.columns else None\n"
@@ -2380,7 +2379,7 @@ cells.append(md(
     "horizontal position is the feature's contribution and its colour is the feature value (red is "
     "high, blue is low, grey is categorical). The dependence panels then plot contribution against "
     "value for the four strongest numeric features, which turns the model into business statements "
-    "such as 'popularity rises with danceability up to 0.7 and then flattens'."
+    "such as 'the target rises with feature X up to a threshold and then flattens'."
 ))
 
 cells.append(code(

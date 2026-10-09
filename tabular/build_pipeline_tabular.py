@@ -518,7 +518,7 @@ cells.append(code(
     "    display(Markdown(f'> **Note:** {msg}'))\n"
     "\n"
     "def to_json(obj, path):\n"
-    "    path.write_text(json.dumps(obj, indent=2, default=lambda o: o.item() if hasattr(o, 'item') else str(o)), encoding='utf-8')"
+    "    path.write_text(json.dumps(obj, indent=2, default=lambda o: o.tolist() if hasattr(o, 'tolist') else str(o)), encoding='utf-8')"
 ))
 
 cells.append(md(

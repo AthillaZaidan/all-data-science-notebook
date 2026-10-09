@@ -1,0 +1,258 @@
+# All Data Science Notebook
+
+Kumpulan notebook template siap pakai untuk lomba data (Kaggle-style). Setiap domain punya dua notebook:
+
+1. **EDA**: analisis lengkap + grafik, lalu menulis `eda-output/eda_decisions.json`.
+2. **Pipeline**: membaca `eda_decisions.json`, lalu menjalankan baseline → model utama → ensemble → evaluasi → interpretasi → export.
+
+Jadi alurnya selalu **EDA dulu, baru pipeline**. Semua keputusan pipeline (metrik, skema CV, transformasi target, kolom yang dibuang, dsb.) diambil dari temuan EDA dan dicatat di tabel keputusan, sehingga mudah dijelaskan di laporan dan presentasi.
+
+| Domain | EDA | Pipeline | Baseline wajib | Model yang bisa dipilih |
+|---|---|---|---|---|
+| Tabular | [`tabular/eda_tabular.ipynb`](tabular/eda_tabular.ipynb) | [`tabular/pipeline_tabular.ipynb`](tabular/pipeline_tabular.ipynb) | Linear / Logistic Regression | LightGBM, XGBoost, CatBoost (+ Optuna) |
+| NLP | [`nlp/eda_nlp.ipynb`](nlp/eda_nlp.ipynb) | [`nlp/pipeline_nlp.ipynb`](nlp/pipeline_nlp.ipynb) | TF-IDF (word + char) + Linear | IndoBERT, RoBERTa, DeBERTa-v3, ModernBERT, XLM-R, mDeBERTa, dll. |
+| Forecasting | [`forecasting/eda_forecasting.ipynb`](forecasting/eda_forecasting.ipynb) | [`forecasting/pipeline_forecasting.ipynb`](forecasting/pipeline_forecasting.ipynb) | Naive, Seasonal Naive, Moving Average, ETS | LightGBM, XGBoost, CatBoost (global model) |
+
+---
+
+## Quick Start
+
+### 1. Pilih lingkungan
+
+Notebook otomatis mendeteksi lingkungan:
+
+| Lingkungan | Deteksi | Path data yang dipakai | Folder output |
+|---|---|---|---|
+| Kaggle | `/kaggle/input` ada | `KAGGLE_PATH` | `/kaggle/working/eda-output`, `/kaggle/working/pipeline-output` |
+| Colab | `/content` ada | `COLAB_PATH` | `eda-output/`, `pipeline-output/` |
+| Lokal | selain di atas | `LOCAL_PATH` | `eda-output/`, `pipeline-output/` (relatif ke folder notebook) |
+
+Cell `%pip install` di bagian **Initialization** menginstal semua dependency. Kalau di lokal, cukup jalankan sekali di venv.
+
+> **Catatan macOS:** LightGBM dan XGBoost butuh `libomp`. Install dengan `brew install libomp`. Kalau tidak tersedia, notebook akan melewati model tersebut dengan peringatan dan tetap jalan dengan model lain.
+
+### 2. Edit cell `Settings`
+
+Satu-satunya cell yang perlu diubah ada di section **2. Initialization → Settings**. Minimal ubah:
+
+```python
+KAGGLE_PATH      = '/kaggle/input/<dataset-slug>/train.csv'   # path di Kaggle
+COLAB_PATH       = '/content/drive/MyDrive/<folder>/train.csv'
+LOCAL_PATH       = 'data/train.csv'                            # path di laptop
+TEST_KAGGLE_PATH = '/kaggle/input/<dataset-slug>/test.csv'     # opsional
+TEST_LOCAL_PATH  = 'data/test.csv'                             # opsional
+READ_KWARGS      = {}                                          # misal {'sep': ';'} atau {'sheet_name': 0}
+```
+
+Format yang didukung: `.csv`, `.tsv`, `.parquet`, `.xlsx`/`.xls`, `.json` (NLP juga `.jsonl`).
+
+Lalu set nama kolom target dan kolom lain yang relevan (lihat bagian per domain di bawah).
+
+### 3. Jalankan EDA → Pipeline
+
+1. Run All `eda_*.ipynb` → menghasilkan `eda-output/` (grafik, tabel, `eda_summary.md`, `eda_decisions.json`).
+2. Run All `pipeline_*.ipynb` di folder yang sama. Pipeline membaca `eda-output/eda_decisions.json` lewat setting `EDA_DIR`.
+
+Di Kaggle, kalau EDA dan pipeline dijalankan di notebook terpisah, upload `eda-output/` sebagai dataset lalu arahkan `EDA_DIR` ke `/kaggle/input/<nama-dataset>/eda-output`.
+
+---
+
+## Cara Kerja Keputusan `'auto'`
+
+Hampir semua setting pipeline bisa diisi `'auto'`. Nilainya ditentukan dengan prioritas:
+
+```
+nilai yang kamu isi sendiri  >  eda_decisions.json  >  dihitung dari data
+```
+
+Setiap keputusan dicatat di tabel **Decisions** (setting, nilai, sumber `user`/`eda`/`computed`, alasan), yang ditampilkan di notebook dan disimpan ke `pipeline-output/final/decisions.csv` serta `report.md`. Kalau file EDA tidak ada, pipeline tetap jalan dan semua keputusan ditandai `computed`.
+
+Untuk mengunci keputusan secara manual, ganti `'auto'` dengan nilai eksplisit, misalnya `METRIC = 'rmse'` atau `CV_SCHEME = 'group'`.
+
+---
+
+## Tabular
+
+### Settings penting
+
+**EDA (`eda_tabular.ipynb`)**
+
+| Setting | Isi |
+|---|---|
+| `TARGET` | nama kolom target. `None` = EDA tanpa target |
+| `TASK` | `'auto'`, `'regression'`, `'binary'`, `'multiclass'` |
+| `ID_COLS`, `DROP_COLS`, `DATE_COLS` | kolom ID, kolom yang dibuang, kolom tanggal |
+| `TIME_COL` | kolom waktu untuk analisis tren dan cek drift (boleh `None`) |
+| `GROUP_COL` | kolom segmen untuk analisis per grup |
+| `CV_GROUP` | kolom yang dicek untuk leakage (ID berulang) |
+| `NUM_COLS`, `CAT_COLS`, `TEXT_COLS` | `'auto'` atau daftar kolom |
+| `SAMPLE_N` | jumlah baris sampel untuk plot berat |
+
+**Pipeline (`pipeline_tabular.ipynb`)**
+
+| Setting | Isi |
+|---|---|
+| `TARGET`, `TASK`, `ID_COLS`, `DROP_COLS`, `SENTINELS` | `'auto'` = ambil dari EDA |
+| `CV_SCHEME` | `'auto'`, `'kfold'`, `'stratified'`, `'group'`, `'time'` |
+| `CV_GROUP`, `TIME_COL`, `DEDUP`, `METRIC` | `'auto'` = ambil dari EDA |
+| `TARGET_TRANSFORM`, `CLASS_WEIGHT`, `DROP_WEAK` | `'auto'` = ambil dari EDA |
+| `HOLDOUT_SIZE` | porsi holdout untuk evaluasi akhir (default 0.2) |
+| `BASELINE` | `'linear'` (Linear / Logistic Regression), selalu dijalankan |
+| `MODELS` | subset dari `['lightgbm', 'xgboost', 'catboost']` |
+| `MODEL_PARAMS` | override hyperparameter per model |
+| `TUNE`, `TUNE_MODEL`, `N_TRIALS` | tuning Optuna (default mati) |
+| `ENSEMBLE` | blend bobot optimal dari OOF |
+| `SUBMISSION_ID` | kolom ID untuk `submission.csv` |
+| `USE_GPU` | `True` kalau pakai GPU Kaggle/Colab |
+
+### Yang dibaca pipeline dari EDA
+
+| Keputusan | Bukti dari EDA |
+|---|---|
+| Target, task, ID, peran kolom | profil kolom |
+| Kolom yang dibuang | kolom konstan / hampir konstan |
+| Sentinel → NaN | nilai placeholder di luar rentang (misal `-999`) |
+| Skema CV + kolom group | ID berulang dan selisih skor split acak vs per grup |
+| Split berdasarkan waktu | kolom waktu + drift train/test kuat (adversarial AUC > 0.7) |
+| Transformasi target, metrik, class weight | skewness target, jenis task, imbalance |
+| Dedup | baris duplikat persis |
+| Fitur lemah | mutual information ≈ 0 dan tidak signifikan |
+
+---
+
+## NLP
+
+### Settings penting
+
+**EDA (`eda_nlp.ipynb`)**
+
+| Setting | Isi |
+|---|---|
+| `TEXT_COL`, `LABEL_COL` | kolom teks dan label (`LABEL_COL` boleh kelas, angka, atau `None`) |
+| `GROUP_COL`, `TIME_COL`, `ID_COL` | opsional |
+| `LANGUAGE` | `'en'`, `'id'`, atau `'both'`. Stopword Indonesia sudah termasuk slang |
+| `EXTRA_STOPWORDS` | stopword tambahan sesuai domain |
+| `REMOVE_PATTERNS` | regex yang dibuang sebelum analisis, misal `[r'\[[^\]]*\]', r'http\S+']` |
+| `TOPIC_K`, `MAX_DOCS`, `TSNE_SAMPLE` | knob analisis topik, sampel, peta semantik |
+
+Isi EDA: kualitas teks, panjang, vocabulary, word cloud (keseluruhan, per label, kata khas), n-gram, kata pembeda per label (log-odds), sentimen (VADER), topic modeling (NMF), peta t-SNE, duplikat dan label noise.
+
+**Pipeline (`pipeline_nlp.ipynb`)**
+
+| Setting | Isi |
+|---|---|
+| `TEXT_COL`, `LABEL_COL`, `TASK` | `'auto'` = ambil dari EDA |
+| `TEXT_PAIR_COL` | kolom teks kedua untuk task pasangan kalimat (opsional) |
+| `TOP_K_CLASSES` | batasi ke K kelas terbanyak (`None` = semua) |
+| `DEBUG_SAMPLE` | jumlah baris untuk uji cepat (`None` = semua) |
+| `MODELS` | `['auto']` = rekomendasi EDA, atau daftar key dari `MODEL_REGISTRY` |
+| `MAX_LENGTH`, `TRUNCATION` | `'auto'` dari distribusi panjang token; `'head_tail'` menyimpan awal + akhir teks |
+| `EPOCHS`, `BATCH_SIZE`, `LR`, `PATIENCE` | hyperparameter fine-tuning |
+| `TRAIN_FOLDS` | fold yang dilatih, misal `[0]` (cepat) atau `[0,1,2,3,4]` (penuh) |
+| `MIXED_PRECISION` | `'auto'` = aktif kalau ada GPU |
+| `SAVE_WEIGHTS` | simpan bobot model ke `final/models/` |
+
+Pilihan model di `MODEL_REGISTRY`:
+
+| Key | Checkpoint | Cocok untuk |
+|---|---|---|
+| `indobert`, `indobert-large`, `indolem`, `indoroberta` | IndoBenchmark / IndoLEM / Flax | Bahasa Indonesia |
+| `roberta`, `twitter-roberta` | RoBERTa base, RoBERTa sentimen Twitter | Bahasa Inggris, teks medsos |
+| `deberta-v3`, `modernbert` | DeBERTa-v3 base, ModernBERT base | Bahasa Inggris, akurasi tinggi / konteks panjang |
+| `xlm-roberta`, `mdeberta`, `multilingual-e5` | multilingual | Campuran bahasa |
+| `distilbert`, `bert-tiny` | model kecil | Uji cepat di CPU |
+
+Model lain dari Hugging Face bisa ditambahkan langsung ke `MODEL_REGISTRY`. Untuk transformer, gunakan GPU (Kaggle T4/P100 atau Colab).
+
+---
+
+## Forecasting
+
+### Format data
+
+Format panjang (long format): satu baris per tanggal per series.
+
+```
+date,store,item,sales,promo
+2023-01-01,S1,I1,12,0
+2023-01-01,S1,I2,5,1
+...
+```
+
+Single series cukup `ID_COLS = []`. Kalau path data tidak ditemukan dan `DEMO_IF_MISSING = True`, notebook EDA membuat data demo di `demo-data/`.
+
+### Settings penting
+
+**EDA (`eda_forecasting.ipynb`)**
+
+| Setting | Isi |
+|---|---|
+| `DATE_COL`, `TARGET_COL` | kolom tanggal dan target |
+| `ID_COLS` | kolom pembentuk series, misal `['store', 'item']` |
+| `EXOG_COLS` | variabel eksogen (`'auto'` = semua kolom numerik lain) |
+| `AGG` | agregasi kalau ada tanggal duplikat (`'sum'` / `'mean'`) |
+| `FREQ`, `HORIZON`, `SEASONAL_PERIODS` | `'auto'` = diinferensi; horizon dari panjang test kalau ada |
+
+Isi EDA: frekuensi dan kelengkapan, intermittency (ADI/CV²), transformasi target, dekomposisi STL, pola musiman, ACF/PACF dan periodogram, stasioneritas (ADF + KPSS), anomali dan level shift, driver kalender/eksogen dan hari spesial, struktur antar series, forecastability baseline.
+
+**Pipeline (`pipeline_forecasting.ipynb`)**
+
+| Setting | Isi |
+|---|---|
+| `FREQ`, `HORIZON`, `SEASONAL_PERIODS`, `TRANSFORM`, `FILL_MISSING` | `'auto'` = ambil dari EDA |
+| `STRATEGY` | `'direct'` (lag ≥ horizon, satu model) atau `'recursive'` |
+| `LAGS`, `ROLL_WINDOWS` | `'auto'` = lag signifikan dari ACF EDA |
+| `EVENT_DATES`, `EVENT_WINDOW` | tanggal spesial (default: Lebaran 2021–2027) dan jendela hari sekitarnya |
+| `N_FOLDS`, `METRIC` | backtest expanding window; metrik `wape` / `smape` / `mase` / `rmse` / `mae` (`'auto'`: WAPE kalau ada banyak nol, selain itu sMAPE) |
+| `MODELS` | subset dari `['lightgbm', 'xgboost', 'catboost']` |
+| `BASELINES` | subset dari `['naive', 'seasonal_naive', 'moving_average', 'ets']` |
+| `OBJECTIVE`, `WEIGHT_BY_VOLUME`, `NON_NEGATIVE` | `'auto'` = dari EDA (misal Tweedie untuk data intermittent) |
+| `INTERVAL` | tingkat prediction interval empiris (default 0.8) |
+
+---
+
+## Output
+
+```
+<domain>/
+├── eda-output/
+│   ├── figures/              # semua grafik, bernomor urut (01_..., 02_...)
+│   ├── tables/               # tabel CSV pendukung
+│   ├── eda_summary.md        # ringkasan temuan
+│   └── eda_decisions.json    # dibaca pipeline
+└── pipeline-output/
+    ├── baseline/             # metrik, OOF, grafik baseline
+    └── final/
+        ├── figures/          # leaderboard, learning curve, SHAP, error analysis
+        ├── decisions.csv     # tabel keputusan + sumber + alasan
+        ├── leaderboard.csv   # skor CV semua model
+        ├── final_metrics.*   # skor holdout + bootstrap CI vs baseline
+        ├── report.md         # ringkasan siap salin ke laporan
+        ├── config.json
+        └── submission.csv    # kalau test set diberikan
+```
+
+Folder output tidak di-commit (`.gitignore`) karena bisa dibuat ulang dengan menjalankan notebook.
+
+Grafik memakai palet yang sama di semua notebook (`#3D5A80` primary, `#EE6C4D` accent), jadi bisa langsung dipakai di laporan.
+
+---
+
+## Mengedit Notebook
+
+Setiap `.ipynb` dibuat dari skrip builder `build_*.py` di folder yang sama. Untuk perubahan permanen, edit builder lalu generate ulang:
+
+```bash
+python tabular/build_pipeline_tabular.py
+```
+
+Perubahan kecil untuk satu lomba (misal path dan nama kolom) cukup diedit langsung di notebook.
+
+---
+
+## Tips Lomba
+
+- **Jalankan EDA dulu.** Tanpa EDA, pipeline tetap jalan tapi keputusan hanya berbasis heuristik, dan tabel keputusan tidak punya bukti untuk laporan.
+- **Uji cepat dulu:** untuk NLP set `DEBUG_SAMPLE = 2000` dan `MODELS = ['bert-tiny']`; untuk tabular set `MODELS = ['lightgbm']` dan `TUNE = False`.
+- **Selalu bandingkan dengan baseline.** `final_metrics` memuat improvement vs baseline beserta bootstrap 95% CI, jadi kamu bisa bilang apakah peningkatannya signifikan.
+- **Ambil isi laporan dari `report.md` dan `eda_summary.md`**, lalu pilih grafik dari `figures/`.

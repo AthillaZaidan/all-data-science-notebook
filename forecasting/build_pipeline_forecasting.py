@@ -1,0 +1,1567 @@
+import json
+import sys
+from pathlib import Path
+from uuid import uuid4
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+OUT = Path(__file__).parent / "pipeline_forecasting.ipynb"
+HR  = "---"
+
+def md(source: str) -> dict:
+    return {"cell_type": "markdown", "id": uuid4().hex[:8], "metadata": {}, "source": source}
+
+def code(source: str) -> dict:
+    return {
+        "cell_type": "code", "execution_count": None, "id": uuid4().hex[:8],
+        "metadata": {}, "outputs": [], "source": source,
+    }
+
+def section(title: str, anchor: str) -> dict:
+    return md(
+        f"{HR}\n\n"
+        f"# {title} <a name=\"{anchor}\"></a>\n\n"
+        f"{HR}"
+    )
+
+cells = []
+
+# ---------------------------------------------------------------------------
+# Banner (3 cells) + TOC
+# ---------------------------------------------------------------------------
+cells.append(md(
+    f"{HR}\n\n"
+    "# Forecasting Pipeline Template\n\n"
+    "*An EDA-driven, global gradient boosting forecasting pipeline for one or many time series. "
+    "Every modelling decision is read from `eda-output/eda_decisions.json`, the model can be "
+    "switched between LightGBM, XGBoost, and CatBoost, statistical baselines are exported to "
+    "`pipeline-output/baseline/`, and the final forecast to `pipeline-output/final/`.*"
+))
+
+cells.append(md(
+    f"{HR}\n\n"
+    "## Team Name\n\n"
+    "- Name 1 (Role)\n"
+    "- Name 2\n"
+    "- Name 3"
+))
+
+cells.append(md(
+    f"{HR}\n\n"
+    "## Table of Contents\n\n"
+    "1. [**Introduction**](#1)\n"
+    "2. [**Initialization**](#2)\n"
+    "3. [**Toolkit**](#3)\n"
+    "4. [**EDA-Driven Decisions**](#4)\n"
+    "5. [**Data Preparation**](#5)\n"
+    "6. [**Feature Engineering**](#6)\n"
+    "7. [**Backtesting Design**](#7)\n"
+    "8. [**Statistical Baselines**](#8)\n"
+    "9. [**Gradient Boosting Forecasters**](#9)\n"
+    "10. [**Ensemble and Model Selection**](#10)\n"
+    "11. [**Backtest Diagnostics**](#11)\n"
+    "12. [**Model Interpretation**](#12)\n"
+    "13. [**Final Forecast**](#13)\n"
+    "14. [**Export**](#14)\n"
+))
+
+# ---------------------------------------------------------------------------
+# Section 1: Introduction
+# ---------------------------------------------------------------------------
+cells.append(section("Introduction", "1"))
+
+cells.append(md(
+    "## Overview\n\n"
+    "*Global gradient boosting models (one model trained on all series with lag, rolling, calendar, "
+    "and event features) have won most recent forecasting competitions, including M5. They only "
+    "work well when the feature design matches the data: the right lags for the horizon, the right "
+    "transform, the right treatment of zeros and events. This notebook takes those choices from the "
+    "forecasting EDA instead of guessing them.*"
+))
+
+cells.append(md(
+    "## Aim\n\n"
+    "*The notebook backtests naive, seasonal naive, moving average, and ETS baselines and any of "
+    "LightGBM, XGBoost, and CatBoost on identical expanding-window folds, blends them, selects the "
+    "best by backtest error, refits on the full history, and produces the future forecast with "
+    "empirical prediction intervals and a submission file.*"
+))
+
+cells.append(md(
+    "## How to Configure\n\n"
+    "*Settings on `'auto'` are filled from `eda-output/eda_decisions.json` (written by "
+    "`eda_forecasting.ipynb`) or computed from the data when the file is missing.*\n\n"
+    "| Setting | Purpose | Example |\n"
+    "|---|---|---|\n"
+    "| `*_PATH`, `TEST_*_PATH` | History file and future frame (dates plus known covariates) | `'train.csv'`, `'test.csv'` |\n"
+    "| `DATE_COL`, `TARGET_COL`, `ID_COLS` | Long-format columns | `'date'`, `'sales'`, `['store', 'item']` |\n"
+    "| `MODELS` | Any subset of `['lightgbm', 'xgboost', 'catboost']` | `['catboost']` |\n"
+    "| `STRATEGY` | `'direct'` (lags >= horizon, one pass) or `'recursive'` (short lags, step by step) | `'direct'` |\n"
+    "| `HORIZON`, `FREQ`, `SEASONAL_PERIODS`, `TRANSFORM`, `LAGS`, `ROLL_WINDOWS` | Forecast design, `'auto'` from EDA | `28`, `'D'`, `[7, 365]` |\n"
+    "| `OBJECTIVE`, `WEIGHT_BY_VOLUME` | Loss and sample weighting, `'auto'` from EDA | `'tweedie'`, `True` |\n"
+    "| `EVENT_DATES` | Known event dates (past and future), for example Eid al-Fitr | `['2025-03-31', ...]` |\n"
+    "| `N_FOLDS`, `METRIC` | Backtest folds and selection metric | `5`, `'wape'` |\n\n"
+    "*A model whose library is not installed is skipped, and the statistical baselines always run.*"
+))
+
+cells.append(md(
+    "## Metric\n\n"
+    "***WAPE** (weighted absolute percentage error) is the default when the series contain zeros, "
+    "because it weights errors by volume and never divides by a zero actual. **MASE** scales the "
+    "error by the in-sample seasonal naive error, so values below 1 beat seasonal naive. RMSE, "
+    "sMAPE, and bias are reported alongside.*\n\n"
+    "$$\\text{WAPE} = \\frac{\\sum_{i,t} |y_{i,t} - \\hat{y}_{i,t}|}{\\sum_{i,t} |y_{i,t}|} \\qquad "
+    "\\text{MASE}_i = \\frac{\\frac{1}{h}\\sum_{t} |y_{i,t} - \\hat{y}_{i,t}|}{\\frac{1}{n-m}\\sum_{t=m+1}^{n} |y_{i,t} - y_{i,t-m}|}$$"
+))
+
+cells.append(md(
+    "## Dataset\n\n"
+    "*The demo uses the same synthetic retail panel as the forecasting EDA: daily sales for 6 stores x "
+    "5 items with weekly and yearly seasonality, Eid al-Fitr (Lebaran) peaks, promotions, prices, "
+    "intermittent items, gaps, outliers, a late-opening store, and a level shift. The 28-day test "
+    "frame carries future prices and promotions.*\n\n"
+    "```\n"
+    "demo-data/\n"
+    "├── train.csv   (date, store, item, sales, price, promo)\n"
+    "└── test.csv    (date, store, item, price, promo)\n"
+    "eda-output/\n"
+    "└── eda_decisions.json\n"
+    "```"
+))
+
+cells.append(md(
+    "## Approach: Global Gradient Boosting on EDA-Designed Features\n\n"
+    "*All series are stacked into one long table and a single model learns shared dynamics, which "
+    "lets short and new series borrow strength from long ones. The direct strategy predicts every "
+    "step of the horizon from information available at the forecast origin, so no prediction is "
+    "fed back as an input and backtest error is an honest estimate of live error.*\n\n"
+    "```\n"
+    "eda_decisions.json --> FREQ, HORIZON, periods, transform, fill, lags, windows, exog, events, metric\n"
+    "Long history + future frame -> regular grid -> fill -> transform\n"
+    "    |\n"
+    "    +-- Features   : lags (>= horizon for direct), rolling mean/std, same-season mean, EWM,\n"
+    "    |                calendar, event distance, known covariates, series ids, series age\n"
+    "    +-- Backtest   : expanding-window folds of HORIZON steps\n"
+    "    |     +-- Baselines : naive, seasonal naive, moving average, ETS     -> pipeline-output/baseline/\n"
+    "    |     +-- GBMs      : LightGBM | XGBoost | CatBoost (early stop on the tail of each train window)\n"
+    "    |     +-- Ensemble  : non-negative weights on backtest forecasts\n"
+    "    +-- Final      : refit on all history -> forecast HORIZON -> empirical intervals\n"
+    "         -> pipeline-output/final/ (submission, forecasts, backtests, report)\n"
+    "```"
+))
+
+# ---------------------------------------------------------------------------
+# Section 2: Initialization
+# ---------------------------------------------------------------------------
+cells.append(section("Initialization", "2"))
+
+cells.append(md(
+    "## Environment Setup\n\n"
+    "The pipeline runs on CPU. On the demo panel (30 series, about 1,300 days) the full backtest "
+    "with three boosting models takes a few minutes. Set `USE_GPU = True` on Kaggle to speed up "
+    "XGBoost and CatBoost on large panels."
+))
+
+cells.append(code("!nvidia-smi"))
+
+cells.append(md("The following cell installs all libraries used in this notebook."))
+
+cells.append(code(
+    "%pip install -q numpy pandas scipy scikit-learn matplotlib seaborn statsmodels pyarrow openpyxl lightgbm xgboost catboost"
+))
+
+cells.append(md(
+    "## Import Libraries\n\n"
+    "The boosting libraries are imported defensively, so a missing one is skipped and the "
+    "statistical baselines still produce a complete forecast."
+))
+
+cells.append(code(
+    "import os\n"
+    "import re\n"
+    "import json\n"
+    "import time\n"
+    "import random\n"
+    "import warnings\n"
+    "from pathlib import Path\n"
+    "\n"
+    "import numpy as np\n"
+    "import pandas as pd\n"
+    "import matplotlib as mpl\n"
+    "import matplotlib.pyplot as plt\n"
+    "import matplotlib.dates as mdates\n"
+    "from matplotlib.colors import LinearSegmentedColormap\n"
+    "import seaborn as sns\n"
+    "from scipy.optimize import minimize\n"
+    "from statsmodels.tsa.holtwinters import ExponentialSmoothing\n"
+    "from IPython.display import Markdown, display\n"
+    "\n"
+    "AVAILABLE = {}\n"
+    "try:\n"
+    "    import lightgbm as lgb\n"
+    "    AVAILABLE['lightgbm'] = lgb.__version__\n"
+    "except Exception as e:\n"
+    "    AVAILABLE['lightgbm'] = False\n"
+    "    print(f'[warn] lightgbm unavailable: {str(e).strip().splitlines()[0][:100]}')\n"
+    "try:\n"
+    "    import xgboost as xgb\n"
+    "    AVAILABLE['xgboost'] = xgb.__version__\n"
+    "except Exception as e:\n"
+    "    AVAILABLE['xgboost'] = False\n"
+    "    print(f'[warn] xgboost unavailable: {str(e).strip().splitlines()[0][:100]}')\n"
+    "try:\n"
+    "    import catboost\n"
+    "    from catboost import CatBoostRegressor, Pool\n"
+    "    AVAILABLE['catboost'] = catboost.__version__\n"
+    "except Exception as e:\n"
+    "    AVAILABLE['catboost'] = False\n"
+    "    print(f'[warn] catboost unavailable: {str(e).strip().splitlines()[0][:100]}')\n"
+    "\n"
+    "warnings.filterwarnings('ignore')\n"
+    "pd.set_option('display.max_columns', 100)\n"
+    "pd.set_option('display.width', 200)\n"
+    "print('Libraries:', AVAILABLE)"
+))
+
+cells.append(md("## Seed Everything"))
+
+cells.append(code(
+    "def seed_everything(seed: int = 42):\n"
+    "    random.seed(seed)\n"
+    "    os.environ['PYTHONHASHSEED'] = str(seed)\n"
+    "    np.random.seed(seed)\n"
+    "\n"
+    "seed_everything(42)"
+))
+
+cells.append(md(
+    "## Settings\n\n"
+    "Paths, columns, the model list, and every forecasting design choice live here. `'auto'` "
+    "values are resolved in section 4 from the EDA decisions file. `EVENT_DATES` defaults to the "
+    "Eid al-Fitr (Lebaran) dates for Indonesia, the most influential retail event there. Replace or "
+    "extend it with the events relevant to the competition, including future dates."
+))
+
+cells.append(code(
+    "class Settings:\n"
+    "    SEED       = 42\n"
+    "    _ON_KAGGLE = Path('/kaggle/input').exists()\n"
+    "    _ON_COLAB  = Path('/content').exists() and not _ON_KAGGLE\n"
+    "\n"
+    "    # 1) Data location: edit the line for the environment you run in\n"
+    "    KAGGLE_PATH      = '/kaggle/input/<dataset-slug>/train.csv'\n"
+    "    COLAB_PATH       = '/content/drive/MyDrive/<folder>/train.csv'\n"
+    "    LOCAL_PATH       = 'demo-data/train.csv'\n"
+    "    TEST_KAGGLE_PATH = None\n"
+    "    TEST_COLAB_PATH  = None\n"
+    "    TEST_LOCAL_PATH  = 'demo-data/test.csv'\n"
+    "    READ_KWARGS      = {}\n"
+    "    DEMO_IF_MISSING  = True\n"
+    "    EDA_DIR          = 'eda-output'\n"
+    "\n"
+    "    # 2) Columns\n"
+    "    DATE_COL   = 'auto'\n"
+    "    TARGET_COL = 'auto'\n"
+    "    ID_COLS    = 'auto'\n"
+    "    EXOG_COLS  = 'auto'\n"
+    "    AGG        = 'sum'\n"
+    "\n"
+    "    # 3) Forecast design ('auto' = from EDA decisions)\n"
+    "    FREQ             = 'auto'\n"
+    "    HORIZON          = 'auto'\n"
+    "    SEASONAL_PERIODS = 'auto'\n"
+    "    TRANSFORM        = 'auto'\n"
+    "    FILL_MISSING     = 'auto'\n"
+    "    STRATEGY         = 'direct'\n"
+    "    LAGS             = 'auto'\n"
+    "    ROLL_WINDOWS     = 'auto'\n"
+    "    EVENT_DATES      = ['2021-05-13', '2022-05-02', '2023-04-22', '2024-04-10', '2025-03-31', '2026-03-20', '2027-03-10']\n"
+    "    EVENT_WINDOW     = 14\n"
+    "    N_FOLDS          = 'auto'\n"
+    "    METRIC           = 'auto'\n"
+    "    NON_NEGATIVE     = 'auto'\n"
+    "\n"
+    "    # 4) Models\n"
+    "    MODELS           = ['lightgbm', 'xgboost', 'catboost']\n"
+    "    BASELINES        = ['naive', 'seasonal_naive', 'moving_average', 'ets']\n"
+    "    ETS_MAX_SERIES   = 200\n"
+    "    OBJECTIVE        = 'auto'\n"
+    "    WEIGHT_BY_VOLUME = 'auto'\n"
+    "    N_ESTIMATORS     = 3000\n"
+    "    LEARNING_RATE    = 0.03\n"
+    "    EARLY_STOPPING   = 150\n"
+    "    REFIT_IN_FOLD    = True\n"
+    "    MODEL_PARAMS     = {'lightgbm': {}, 'xgboost': {}, 'catboost': {}}\n"
+    "    USE_GPU          = False\n"
+    "    ENSEMBLE         = True\n"
+    "    INTERVAL         = 0.8\n"
+    "\n"
+    "    # 5) Outputs\n"
+    "    DATA_PATH    = KAGGLE_PATH if _ON_KAGGLE else COLAB_PATH if _ON_COLAB else LOCAL_PATH\n"
+    "    TEST_PATH    = TEST_KAGGLE_PATH if _ON_KAGGLE else TEST_COLAB_PATH if _ON_COLAB else TEST_LOCAL_PATH\n"
+    "    OUTPUT_DIR   = Path('/kaggle/working/pipeline-output') if _ON_KAGGLE else Path('pipeline-output')\n"
+    "    BASELINE_DIR = OUTPUT_DIR / 'baseline'\n"
+    "    FINAL_DIR    = OUTPUT_DIR / 'final'\n"
+    "\n"
+    "CFG = Settings()\n"
+    "for d in (CFG.BASELINE_DIR / 'figures', CFG.FINAL_DIR / 'figures', CFG.FINAL_DIR / 'backtests'):\n"
+    "    d.mkdir(parents=True, exist_ok=True)\n"
+    "env = 'Kaggle' if CFG._ON_KAGGLE else 'Colab' if CFG._ON_COLAB else 'Local'\n"
+    "print(f'Environment : {env}')\n"
+    "print(f'Data path   : {CFG.DATA_PATH}')\n"
+    "print(f'Test path   : {CFG.TEST_PATH}')\n"
+    "print(f'Output dir  : {CFG.OUTPUT_DIR.resolve()}')"
+))
+
+cells.append(md(
+    "## Demo Data Generator\n\n"
+    "The same generator as the EDA notebook, used only when the configured file is missing and "
+    "`DEMO_IF_MISSING` is true."
+))
+
+cells.append(code(
+    "def make_demo(train_path, test_path, seed=42):\n"
+    "    rng = np.random.RandomState(seed)\n"
+    "    dates = pd.date_range('2021-01-01', '2024-06-30', freq='D')\n"
+    "    future = pd.date_range(dates[-1] + pd.Timedelta(days=1), periods=28, freq='D')\n"
+    "    lebaran = pd.to_datetime(['2021-05-13', '2022-05-02', '2023-04-22', '2024-04-10'])\n"
+    "    all_dates = dates.append(future)\n"
+    "    t = np.arange(len(all_dates))\n"
+    "    weekly = np.array([0.9, 0.85, 0.9, 0.95, 1.1, 1.35, 1.25])[all_dates.dayofweek]\n"
+    "    yearly = 1 + 0.15 * np.sin(2 * np.pi * (all_dates.dayofyear - 80) / 365.25)\n"
+    "    days_to_eid = np.min(np.abs((all_dates.values[:, None] - lebaran.values[None, :]).astype('timedelta64[D]').astype(int)), axis=1)\n"
+    "    eid = 1 + 1.2 * np.exp(-days_to_eid / 4.0) * (days_to_eid <= 14)\n"
+    "    rows = []\n"
+    "    for s in range(1, 7):\n"
+    "        for it in range(1, 6):\n"
+    "            base = rng.uniform(20, 120) if it <= 3 else rng.uniform(0.3, 1.5)\n"
+    "            trend = 1 + rng.uniform(-0.1, 0.35) * t / len(t)\n"
+    "            price0 = rng.uniform(10, 60)\n"
+    "            price = price0 * (1 + 0.04 * np.sin(t / 90 + s)) * np.where(rng.rand(len(t)) < 0.03, 0.85, 1.0)\n"
+    "            promo = (rng.rand(len(t)) < 0.06).astype(int)\n"
+    "            lam = base * trend * weekly * yearly * eid * (1 + 0.5 * promo) * (price / price0) ** -1.5\n"
+    "            if s == 3 and it == 1:\n"
+    "                lam = lam * np.where(all_dates >= '2023-03-01', 1.6, 1.0)\n"
+    "            y = rng.poisson(lam * rng.gamma(20, 1 / 20, len(t))).astype(float)\n"
+    "            frame = pd.DataFrame({'date': all_dates, 'store': f'S{s}', 'item': f'I{it}', 'sales': y,\n"
+    "                                  'price': price.round(2), 'promo': promo})\n"
+    "            if s == 6:\n"
+    "                frame = frame[frame['date'] >= '2022-07-01']\n"
+    "            rows.append(frame)\n"
+    "    full = pd.concat(rows, ignore_index=True)\n"
+    "    train = full[full['date'] <= dates[-1]].copy()\n"
+    "    spikes = train.sample(12, random_state=seed).index\n"
+    "    train.loc[spikes, 'sales'] *= 8\n"
+    "    train = train.drop(train[(train['date'].between('2022-02-10', '2022-02-16')) & (train['store'] == 'S2')].index)\n"
+    "    train = train.drop(train.sample(frac=0.01, random_state=seed).index)\n"
+    "    test = full[full['date'] > dates[-1]].drop(columns='sales')\n"
+    "    Path(train_path).parent.mkdir(parents=True, exist_ok=True)\n"
+    "    train.to_csv(train_path, index=False)\n"
+    "    test.to_csv(test_path, index=False)\n"
+    "    print(f'Demo data written: {train_path} ({len(train):,} rows), {test_path} ({len(test):,} rows)')"
+))
+
+cells.append(md(
+    "## Load Dataset\n\n"
+    "The history and the optional future frame are loaded with the same resolver as the other "
+    "templates. Column roles are fixed in section 4, once the EDA decisions are known."
+))
+
+cells.append(code(
+    "TABULAR_EXT = ('.csv', '.tsv', '.txt', '.parquet', '.pq', '.feather', '.xlsx', '.xls', '.json', '.zip', '.gz')\n"
+    "\n"
+    "def resolve_path(path):\n"
+    "    if path is None:\n"
+    "        return None\n"
+    "    p = Path(path)\n"
+    "    if p.exists():\n"
+    "        return p\n"
+    "    roots = [Path('/kaggle/input')] if CFG._ON_KAGGLE else [Path('/content')] if CFG._ON_COLAB else []\n"
+    "    candidates = [f for r in roots for f in r.rglob('*') if f.is_file() and f.suffix.lower() in TABULAR_EXT]\n"
+    "    if not candidates:\n"
+    "        return None\n"
+    "    best = max(candidates, key=lambda f: f.stat().st_size)\n"
+    "    print(f'[warn] {p} not found, falling back to the largest file: {best}')\n"
+    "    return best\n"
+    "\n"
+    "def load_table(path, **kwargs):\n"
+    "    suffixes = [s.lower() for s in path.suffixes]\n"
+    "    if '.parquet' in suffixes or '.pq' in suffixes:\n"
+    "        return pd.read_parquet(path, **kwargs)\n"
+    "    if '.feather' in suffixes:\n"
+    "        return pd.read_feather(path, **kwargs)\n"
+    "    if '.xlsx' in suffixes or '.xls' in suffixes:\n"
+    "        return pd.read_excel(path, **kwargs)\n"
+    "    if '.json' in suffixes:\n"
+    "        return pd.read_json(path, **kwargs)\n"
+    "    if '.tsv' in suffixes:\n"
+    "        kwargs.setdefault('sep', '\\t')\n"
+    "    return pd.read_csv(path, low_memory=False, **kwargs)\n"
+    "\n"
+    "DATA_PATH = resolve_path(CFG.DATA_PATH)\n"
+    "if DATA_PATH is None and CFG.DEMO_IF_MISSING:\n"
+    "    make_demo(CFG.LOCAL_PATH, CFG.TEST_LOCAL_PATH or 'demo-data/test.csv', CFG.SEED)\n"
+    "    DATA_PATH = Path(CFG.LOCAL_PATH)\n"
+    "assert DATA_PATH is not None, f'{CFG.DATA_PATH} not found. Edit the path lines in Settings.'\n"
+    "TEST_PATH = resolve_path(CFG.TEST_PATH)\n"
+    "raw = load_table(DATA_PATH, **CFG.READ_KWARGS)\n"
+    "raw_test = load_table(TEST_PATH, **CFG.READ_KWARGS) if TEST_PATH else None\n"
+    "print(f'History: {raw.shape[0]:,} rows x {raw.shape[1]} cols' + (f' | future frame: {raw_test.shape[0]:,} rows' if raw_test is not None else ''))"
+))
+
+# ---------------------------------------------------------------------------
+# Section 3: Toolkit
+# ---------------------------------------------------------------------------
+cells.append(section("Toolkit", "3"))
+
+cells.append(md(
+    "The plotting identity matches the other templates. The metric functions work on long frames "
+    "of actuals and forecasts, so every model, fold, and horizon step is scored identically. MASE "
+    "uses a per-series scale computed only from data before each forecast origin."
+))
+
+cells.append(code(
+    "PRIMARY   = '#3D5A80'\n"
+    "ACCENT    = '#EE6C4D'\n"
+    "SOFT      = '#98C1D9'\n"
+    "DARK      = '#1B263B'\n"
+    "MUTED     = '#8D99AE'\n"
+    "PALETTE   = ['#3D5A80', '#EE6C4D', '#2A9D8F', '#E9C46A', '#9B5DE5',\n"
+    "             '#F15BB5', '#00BBF9', '#8AB17D', '#E76F51', '#264653']\n"
+    "CMAP_SEQ  = LinearSegmentedColormap.from_list('seq', ['#F7F9FC', '#98C1D9', '#3D5A80', '#1B263B'])\n"
+    "\n"
+    "sns.set_theme(style='whitegrid', palette=PALETTE)\n"
+    "mpl.rcParams.update({\n"
+    "    'figure.dpi': 100, 'savefig.dpi': 200, 'savefig.bbox': 'tight',\n"
+    "    'figure.facecolor': 'white', 'axes.facecolor': 'white',\n"
+    "    'axes.spines.top': False, 'axes.spines.right': False,\n"
+    "    'axes.edgecolor': '#C9D1DB', 'axes.labelcolor': DARK, 'axes.titleweight': 'bold',\n"
+    "    'axes.titlesize': 12, 'axes.labelsize': 10, 'axes.titlecolor': DARK,\n"
+    "    'xtick.color': '#4A5568', 'ytick.color': '#4A5568',\n"
+    "    'grid.color': '#E2E8F0', 'grid.linewidth': 0.8, 'legend.frameon': False, 'font.size': 10,\n"
+    "})\n"
+    "\n"
+    "FIG_COUNTER = {'baseline': 0, 'final': 0}\n"
+    "\n"
+    "def slug(text):\n"
+    "    return re.sub(r'[^a-z0-9]+', '_', str(text).lower()).strip('_')[:60]\n"
+    "\n"
+    "def save_fig(fig, name, stage='final'):\n"
+    "    FIG_COUNTER[stage] += 1\n"
+    "    root = CFG.BASELINE_DIR if stage == 'baseline' else CFG.FINAL_DIR\n"
+    "    fig.savefig(root / 'figures' / f'{FIG_COUNTER[stage]:02d}_{slug(name)}.png', facecolor='white')\n"
+    "    plt.show()\n"
+    "    plt.close(fig)\n"
+    "\n"
+    "def suptitle(fig, title, subtitle=None, layout=True):\n"
+    "    h = fig.get_figheight()\n"
+    "    if layout:\n"
+    "        fig.tight_layout(rect=(0, 0, 1, 1 - (0.85 if subtitle else 0.55) / h))\n"
+    "    fig.text(0.01, 1 - 0.1 / h, title, ha='left', va='top', fontsize=15, fontweight='bold', color=DARK)\n"
+    "    if subtitle:\n"
+    "        fig.text(0.01, 1 - 0.42 / h, subtitle, ha='left', va='top', fontsize=10, color=MUTED)\n"
+    "\n"
+    "def date_axis(ax):\n"
+    "    loc = mdates.AutoDateLocator()\n"
+    "    ax.xaxis.set_major_locator(loc)\n"
+    "    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(loc))\n"
+    "\n"
+    "def bar_labels(ax, fmt='{:,.0f}', size=8):\n"
+    "    for container in ax.containers:\n"
+    "        if hasattr(container, 'datavalues'):\n"
+    "            ax.bar_label(container, labels=[fmt.format(v) for v in container.datavalues], padding=3, fontsize=size, color='#4A5568')\n"
+    "\n"
+    "def short(value, k=28):\n"
+    "    value = str(value)\n"
+    "    return value if len(value) <= k else value[:k - 3] + '...'\n"
+    "\n"
+    "def note(msg):\n"
+    "    display(Markdown(f'> **Note:** {msg}'))\n"
+    "\n"
+    "def to_json(obj, path):\n"
+    "    path.write_text(json.dumps(obj, indent=2, default=lambda o: o.item() if hasattr(o, 'item') else str(o)), encoding='utf-8')\n"
+    "\n"
+    "def metrics(frame):\n"
+    "    y, p = frame['y_true'].values, frame['y_pred'].values\n"
+    "    e = y - p\n"
+    "    denom = np.abs(y).sum()\n"
+    "    out = {'wape': np.abs(e).sum() / denom if denom > 0 else np.nan,\n"
+    "           'mae': np.abs(e).mean(), 'rmse': np.sqrt((e ** 2).mean()),\n"
+    "           'smape': np.mean(2 * np.abs(e) / np.clip(np.abs(y) + np.abs(p), 1e-9, None)),\n"
+    "           'bias': (p.sum() - y.sum()) / denom if denom > 0 else np.nan}\n"
+    "    if 'scale' in frame and 'series' in frame:\n"
+    "        out['mase'] = (frame.assign(ae=np.abs(e)).groupby('series')['ae'].mean() / frame.groupby('series')['scale'].first()).replace([np.inf], np.nan).mean()\n"
+    "    elif 'scale' in frame:\n"
+    "        out['mase'] = float((np.abs(e) / frame['scale'].values).mean())\n"
+    "    return {k: float(v) for k, v in out.items()}"
+))
+
+# ---------------------------------------------------------------------------
+# Section 4: EDA-Driven Decisions
+# ---------------------------------------------------------------------------
+cells.append(section("EDA-Driven Decisions", "4"))
+
+cells.append(md(
+    "Every design choice is resolved here, in priority order: an explicit value in `Settings`, then "
+    "`eda_decisions.json`, then a value computed from the data. The decision table records the "
+    "source of each choice, so the methodology chapter of the report can state exactly which EDA "
+    "finding drove which modelling decision."
+))
+
+cells.append(code(
+    "eda_path = Path(CFG.EDA_DIR) / 'eda_decisions.json'\n"
+    "EDA = json.loads(eda_path.read_text()) if eda_path.exists() else {}\n"
+    "print(f'EDA decisions: {eda_path.resolve()} ({\"found\" if EDA else \"not found, computing from data\"})')\n"
+    "if EDA and Path(EDA.get('source', '')).name != DATA_PATH.name:\n"
+    "    print(f'[warn] EDA was run on {EDA.get(\"source\")}, not {DATA_PATH.name}')\n"
+    "DECISIONS = []\n"
+    "\n"
+    "def decide(name, user_value, eda_key, compute, why=''):\n"
+    "    if user_value != 'auto':\n"
+    "        value, source = user_value, 'user'\n"
+    "    elif eda_key and EDA.get(eda_key) is not None:\n"
+    "        value, source = EDA[eda_key], 'eda'\n"
+    "    else:\n"
+    "        value, source = compute(), 'computed'\n"
+    "    DECISIONS.append({'setting': name, 'value': str(value)[:80], 'source': source, 'why': why})\n"
+    "    return value\n"
+    "\n"
+    "def guess_date():\n"
+    "    for c in raw.columns:\n"
+    "        if 'date' in c.lower() or 'time' in c.lower() or c.lower() in ('ds', 'period', 'month', 'week'):\n"
+    "            return c\n"
+    "    return raw.columns[0]\n"
+    "\n"
+    "D = decide('DATE_COL', CFG.DATE_COL, 'date_col', guess_date)\n"
+    "Y = decide('TARGET_COL', CFG.TARGET_COL, 'target_col', lambda: [c for c in raw.columns if pd.api.types.is_numeric_dtype(raw[c])][-1])\n"
+    "IDS = decide('ID_COLS', CFG.ID_COLS, 'id_cols', lambda: [c for c in raw.columns if c not in (D, Y) and not pd.api.types.is_numeric_dtype(raw[c])])\n"
+    "IDS = [c for c in IDS if c in raw.columns]\n"
+    "\n"
+    "def prep(frame):\n"
+    "    frame = frame.copy()\n"
+    "    frame[D] = pd.to_datetime(frame[D], errors='coerce')\n"
+    "    frame = frame.dropna(subset=[D])\n"
+    "    frame['series'] = frame[IDS].astype(str).agg(' | '.join, axis=1) if IDS else 'total'\n"
+    "    return frame\n"
+    "\n"
+    "raw = prep(raw)\n"
+    "raw_test = prep(raw_test) if raw_test is not None else None\n"
+    "EXOG_ALL = [c for c in raw.columns if c not in IDS + [D, Y, 'series'] and pd.api.types.is_numeric_dtype(raw[c])] if CFG.EXOG_COLS == 'auto' else list(CFG.EXOG_COLS)\n"
+    "EXOG_KNOWN = decide('EXOG_KNOWN', 'auto' if CFG.EXOG_COLS == 'auto' else CFG.EXOG_COLS, 'exog_known_future',\n"
+    "                    lambda: [c for c in EXOG_ALL if raw_test is not None and c in raw_test.columns], 'covariates present in the future frame')\n"
+    "EXOG_KNOWN = [c for c in EXOG_KNOWN if c in raw.columns]\n"
+    "EXOG_PAST = [c for c in EXOG_ALL if c not in EXOG_KNOWN]\n"
+    "print(f'date={D!r} target={Y!r} ids={IDS} known covariates={EXOG_KNOWN} past-only={EXOG_PAST}')"
+))
+
+cells.append(md(
+    "## Frequency, Horizon, Seasonality, Transform\n\n"
+    "Fallback computations mirror the EDA: the frequency from the most common step, the horizon "
+    "from the future frame, seasonal periods from the frequency, and the transform from the "
+    "variance-to-level slope across series."
+))
+
+cells.append(code(
+    "OFFSET_DEFAULTS = {'min': ([60, 1440], 60), 'h': ([24, 168], 48), 'D': ([7, 365], 28), 'W': ([52], 13),\n"
+    "                   'MS': ([12], 12), 'ME': ([12], 12), 'QS': ([4], 8), 'YS': ([1], 3)}\n"
+    "\n"
+    "def compute_freq():\n"
+    "    step = raw.sort_values(['series', D]).groupby('series')[D].diff().dropna().mode().iloc[0]\n"
+    "    days = step / pd.Timedelta(days=1)\n"
+    "    if days < 1:\n"
+    "        hours = max(1, int(round(days * 24)))\n"
+    "        return 'h' if hours == 1 else f'{hours}h'\n"
+    "    if days < 6:\n"
+    "        return 'D'\n"
+    "    if days < 25:\n"
+    "        return 'W-' + ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'][raw[D].dt.dayofweek.mode().iloc[0]]\n"
+    "    if days < 80:\n"
+    "        return 'MS' if (raw[D].dt.day == 1).mean() > 0.8 else 'ME'\n"
+    "    return 'QS' if days < 300 else 'YS'\n"
+    "\n"
+    "FREQ = decide('FREQ', CFG.FREQ, 'freq', compute_freq, 'most common step between timestamps')\n"
+    "FKEY = 'h' if FREQ.endswith('h') else 'W' if FREQ.startswith('W') else FREQ if FREQ in OFFSET_DEFAULTS else 'D'\n"
+    "periods_default, h_default = OFFSET_DEFAULTS.get(FKEY, ([7], 14))\n"
+    "HORIZON = int(decide('HORIZON', CFG.HORIZON, 'horizon',\n"
+    "                     lambda: int(raw_test.groupby('series')[D].nunique().median()) if raw_test is not None else h_default,\n"
+    "                     'steps in the future frame, else a frequency default'))\n"
+    "SEASONAL_PERIODS = [int(p) for p in decide('SEASONAL_PERIODS', CFG.SEASONAL_PERIODS, 'seasonal_periods', lambda: periods_default,\n"
+    "                                           'frequency defaults confirmed by the periodogram')]\n"
+    "M = SEASONAL_PERIODS[0]\n"
+    "\n"
+    "def compute_transform():\n"
+    "    if raw[Y].min() < 0:\n"
+    "        return 'none'\n"
+    "    st = raw.groupby('series')[Y].agg(['mean', 'std'])\n"
+    "    st = st[(st['mean'] > 0) & (st['std'] > 0)]\n"
+    "    if len(st) >= 3:\n"
+    "        slope = np.polyfit(np.log(st['mean']), np.log(st['std']), 1)[0]\n"
+    "        return 'log1p' if slope > 0.75 else 'sqrt' if slope > 0.3 else 'none'\n"
+    "    return 'log1p' if raw[Y].skew() > 2 else 'none'\n"
+    "\n"
+    "TRANSFORM = decide('TRANSFORM', CFG.TRANSFORM, 'transform', compute_transform, 'variance-to-level slope across series')\n"
+    "NON_NEG = bool(decide('NON_NEGATIVE', CFG.NON_NEGATIVE, None, lambda: bool(raw[Y].min() >= 0), 'target never negative'))\n"
+    "ZERO_SHARE = float(EDA.get('zero_share', (raw[Y] == 0).mean()))\n"
+    "INTER_SHARE = float(EDA.get('intermittent_share', 0.0))\n"
+    "FILL = decide('FILL_MISSING', CFG.FILL_MISSING, 'fill_missing', lambda: 'zero' if ZERO_SHARE > 0.05 else 'interpolate',\n"
+    "              'zeros are common, so a missing record most likely means no activity')\n"
+    "METRIC = decide('METRIC', CFG.METRIC, 'metric', lambda: 'wape' if ZERO_SHARE > 0.01 else 'smape', 'zero share decides WAPE vs sMAPE')"
+))
+
+cells.append(md(
+    "## Features, Validation, and Loss\n\n"
+    "Lags come from the EDA autocorrelation analysis: with the direct strategy only lags of at least "
+    "the horizon are allowed (all information must exist at the forecast origin), while the "
+    "recursive strategy may use short lags. The objective follows the target treatment: squared "
+    "error on a log-transformed target, Tweedie for raw zero-heavy targets, squared error otherwise. "
+    "When the metric is volume-weighted (WAPE) and the target is log-transformed, rows are weighted "
+    "by series volume so that the loss matches the metric."
+))
+
+cells.append(code(
+    "STRATEGY = CFG.STRATEGY\n"
+    "MIN_LAG = HORIZON if STRATEGY == 'direct' else 1\n"
+    "\n"
+    "def compute_lags():\n"
+    "    base = [MIN_LAG, MIN_LAG + 1, MIN_LAG + 2] + [k * M for k in range(1, 9) if k * M >= MIN_LAG][:4]\n"
+    "    base += [p for p in SEASONAL_PERIODS[1:] if p >= MIN_LAG]\n"
+    "    return sorted(set(base))\n"
+    "\n"
+    "eda_lags = 'lags_direct' if STRATEGY == 'direct' else 'lags_recursive'\n"
+    "LAGS = sorted({int(l) for l in decide('LAGS', CFG.LAGS, eda_lags, compute_lags, f'significant ACF lags usable with the {STRATEGY} strategy') if int(l) >= MIN_LAG})\n"
+    "ROLL_WINDOWS = sorted({int(w) for w in decide('ROLL_WINDOWS', CFG.ROLL_WINDOWS, 'rolling_windows',\n"
+    "                                               lambda: [M, 2 * M, 4 * M] + SEASONAL_PERIODS[1:], 'multiples of the main season')})\n"
+    "EVENTS = pd.to_datetime(CFG.EVENT_DATES) if CFG.EVENT_DATES else pd.DatetimeIndex([])\n"
+    "if EDA.get('special_dates'):\n"
+    "    print('EDA special-day candidates (check they are covered by EVENT_DATES):', EDA['special_dates'][:8])\n"
+    "\n"
+    "def compute_folds():\n"
+    "    min_len = int(raw.groupby('series').size().median())\n"
+    "    return int(max(1, min(5, (min_len - 2 * M - HORIZON) // HORIZON)))\n"
+    "\n"
+    "N_FOLDS = int(decide('N_FOLDS', CFG.N_FOLDS, None, lambda: int(EDA['cv']['n_folds']) if EDA.get('cv') else compute_folds(),\n"
+    "                     'expanding-window folds that fit in the median series length'))\n"
+    "OBJECTIVE = decide('OBJECTIVE', CFG.OBJECTIVE, None,\n"
+    "                   lambda: 'l2' if TRANSFORM in ('log1p', 'sqrt') else ('tweedie' if NON_NEG and (ZERO_SHARE > 0.1 or INTER_SHARE > 0.2) else 'l2'),\n"
+    "                   'transformed target -> L2; raw zero-heavy target -> Tweedie')\n"
+    "WEIGHT_BY_VOLUME = bool(decide('WEIGHT_BY_VOLUME', CFG.WEIGHT_BY_VOLUME, None, lambda: bool(METRIC == 'wape' and TRANSFORM != 'none'),\n"
+    "                               'align a log-scale loss with the volume-weighted metric'))\n"
+    "MODELS = [m for m in CFG.MODELS if AVAILABLE.get(m)]\n"
+    "SKIPPED = [m for m in CFG.MODELS if m not in MODELS]\n"
+    "DECISIONS.append({'setting': 'MODELS', 'value': str(MODELS), 'source': 'user', 'why': f'skipped (not installed): {SKIPPED}' if SKIPPED else 'all requested models available'})\n"
+    "if EDA.get('model_families'):\n"
+    "    print('EDA model families:', EDA['model_families'])\n"
+    "\n"
+    "decision_table = pd.DataFrame(DECISIONS).set_index('setting')\n"
+    "decision_table.to_csv(CFG.FINAL_DIR / 'decisions.csv')\n"
+    "display(decision_table)"
+))
+
+cells.append(md(
+    "#### Insights\n\n"
+    "> *Fill in after running.* Quote the decision table: which choices came from the EDA, which "
+    "were overridden, and why. This is the bridge between the EDA chapter and the modelling chapter "
+    "of the report."
+))
+
+# ---------------------------------------------------------------------------
+# Section 5: Data Preparation
+# ---------------------------------------------------------------------------
+cells.append(section("Data Preparation", "5"))
+
+cells.append(md(
+    "Each series is placed on a regular grid from its first observation to the end of the history, "
+    "and the future frame is appended for the next `HORIZON` steps. Missing target values inside "
+    "the lifespan are filled as decided (zero or interpolation), known covariates are forward and "
+    "backward filled within each series, and the transform is applied. The untransformed target is "
+    "kept for scoring."
+))
+
+cells.append(code(
+    "agg_map = {Y: CFG.AGG, **{c: 'mean' for c in EXOG_ALL}}\n"
+    "hist = raw.groupby(['series', D], as_index=False).agg(agg_map)\n"
+    "ids_map = raw.drop_duplicates('series').set_index('series')[IDS] if IDS else pd.DataFrame(index=hist['series'].unique())\n"
+    "LAST = hist[D].max()\n"
+    "FUTURE_DATES = pd.date_range(LAST, periods=HORIZON + 1, freq=FREQ)[1:]\n"
+    "\n"
+    "frames = []\n"
+    "for s, g in hist.groupby('series'):\n"
+    "    grid = pd.date_range(g[D].min(), FUTURE_DATES[-1], freq=FREQ)\n"
+    "    f = g.set_index(D).reindex(grid)\n"
+    "    f.index.name = D\n"
+    "    f['series'] = s\n"
+    "    frames.append(f.reset_index())\n"
+    "data = pd.concat(frames, ignore_index=True)\n"
+    "data['is_future'] = data[D] > LAST\n"
+    "if raw_test is not None and EXOG_KNOWN:\n"
+    "    fut = raw_test.groupby(['series', D], as_index=False)[EXOG_KNOWN].mean()\n"
+    "    data = data.merge(fut, on=['series', D], how='left', suffixes=('', '_future'))\n"
+    "    for c in EXOG_KNOWN:\n"
+    "        data[c] = data[c].fillna(data[f'{c}_future'])\n"
+    "        data = data.drop(columns=f'{c}_future')\n"
+    "\n"
+    "gap = data[Y].isna() & ~data['is_future']\n"
+    "if FILL == 'zero':\n"
+    "    data.loc[gap, Y] = 0.0\n"
+    "else:\n"
+    "    data[Y] = data.groupby('series')[Y].transform(lambda s: s.interpolate(limit_direction='both'))\n"
+    "    data.loc[data['is_future'], Y] = np.nan\n"
+    "for c in EXOG_ALL:\n"
+    "    data[c] = data.groupby('series')[c].transform(lambda s: s.ffill().bfill())\n"
+    "for c in IDS:\n"
+    "    data[c] = data['series'].map(ids_map[c])\n"
+    "\n"
+    "def fwd(x):\n"
+    "    return np.log1p(np.clip(x, 0, None)) if TRANSFORM == 'log1p' else np.sqrt(np.clip(x, 0, None)) if TRANSFORM == 'sqrt' else x\n"
+    "\n"
+    "def inv(x):\n"
+    "    x = np.expm1(x) if TRANSFORM == 'log1p' else np.square(np.clip(x, 0, None)) if TRANSFORM == 'sqrt' else x\n"
+    "    return np.clip(x, 0, None) if NON_NEG else x\n"
+    "\n"
+    "data = data.sort_values(['series', D]).reset_index(drop=True)\n"
+    "data['y_raw'] = data[Y]\n"
+    "data['y'] = fwd(data[Y])\n"
+    "SERIES = data['series'].unique().tolist()\n"
+    "print(f'{len(SERIES)} series | {len(data):,} grid rows ({int(gap.sum()):,} gaps filled with {FILL}) | '\n"
+    "      f'history to {LAST.date()} | future {FUTURE_DATES[0].date()} to {FUTURE_DATES[-1].date()}')\n"
+    "display(data.head())"
+))
+
+# ---------------------------------------------------------------------------
+# Section 6: Feature Engineering
+# ---------------------------------------------------------------------------
+cells.append(section("Feature Engineering", "6"))
+
+cells.append(md(
+    "Features are computed per series on the transformed target. Every target-derived feature is "
+    "shifted by at least `MIN_LAG` steps (the horizon for the direct strategy), so a row never sees "
+    "a value that would be unknown at the forecast origin. The feature families are as follows.\n\n"
+    "| Family | Features | Source of the design |\n"
+    "|---|---|---|\n"
+    "| Lags | `lag_k` for each k in `LAGS` | EDA ACF analysis |\n"
+    "| Rolling | mean and std over `ROLL_WINDOWS`, EWM (alpha 0.1, 0.3) | EDA seasonal periods |\n"
+    "| Same season | mean of the last values at multiples of the main period | EDA seasonal strength |\n"
+    "| Intermittency | zero share in recent windows, steps since last non-zero (only when zeros are common) | EDA demand classes |\n"
+    "| Calendar | hour, weekday, day of month, week, month, year, month start/end flags | EDA seasonal profiles |\n"
+    "| Events | days to next / since last event, in-window flag | `EVENT_DATES` + EDA special days |\n"
+    "| Covariates | known covariates as is plus relative to their recent mean; past-only ones lagged | EDA driver analysis |\n"
+    "| Identity | series id and id columns (categorical), series age | panel structure |"
+))
+
+cells.append(code(
+    "INTERMITTENT_FEATURES = ZERO_SHARE > 0.05 or INTER_SHARE > 0.1\n"
+    "\n"
+
+    "def event_features(dates):\n"
+    "    out = pd.DataFrame(index=dates.index)\n"
+    "    if len(EVENTS) == 0:\n"
+    "        return out\n"
+    "    ev = EVENTS.sort_values().values\n"
+    "    d = dates.values.astype('datetime64[D]')\n"
+    "    pos = np.searchsorted(ev.astype('datetime64[D]'), d)\n"
+    "    nxt = np.where(pos < len(ev), (ev[np.minimum(pos, len(ev) - 1)].astype('datetime64[D]') - d).astype(int), 9999)\n"
+    "    prv = np.where(pos > 0, (d - ev[np.maximum(pos - 1, 0)].astype('datetime64[D]')).astype(int), 9999)\n"
+    "    out['days_to_event'] = np.clip(nxt, 0, 60)\n"
+    "    out['days_since_event'] = np.clip(prv, 0, 60)\n"
+    "    out['event_window'] = ((nxt <= CFG.EVENT_WINDOW) | (prv <= CFG.EVENT_WINDOW)).astype(int)\n"
+    "    return out\n"
+    "\n"
+    "def build_features(frame):\n"
+    "    KEYS = frame['series'].values\n"
+    "    g = frame.groupby('series', sort=False)['y']\n"
+    "    feats = {}\n"
+    "    for L in LAGS:\n"
+    "        feats[f'lag_{L}'] = g.shift(L)\n"
+    "    base = g.shift(MIN_LAG)\n"
+    "    gb = base.groupby(KEYS)\n"
+    "    for w in ROLL_WINDOWS:\n"
+    "        r = gb.rolling(w, min_periods=max(1, w // 2))\n"
+    "        feats[f'roll_mean_{w}'] = r.mean().reset_index(level=0, drop=True)\n"
+    "        if w <= 4 * M:\n"
+    "            feats[f'roll_std_{w}'] = r.std().reset_index(level=0, drop=True)\n"
+    "    for a in (0.1, 0.3):\n"
+    "        feats[f'ewm_{a}'] = gb.transform(lambda s: s.ewm(alpha=a, ignore_na=True).mean())\n"
+    "    ks = [k * M for k in range(1, 9) if k * M >= MIN_LAG][:4]\n"
+    "    if M > 1 and ks:\n"
+    "        feats['same_season_mean'] = pd.concat([g.shift(k) for k in ks], axis=1).mean(axis=1)\n"
+    "    if INTERMITTENT_FEATURES:\n"
+    "        nz = (base > 0).astype(float).where(base.notna())\n"
+    "        for w in sorted({M, 4 * M}):\n"
+    "            feats[f'nonzero_share_{w}'] = nz.groupby(KEYS).rolling(w, min_periods=1).mean().reset_index(level=0, drop=True)\n"
+    "        idx = pd.Series(np.where(base > 0, np.arange(len(frame)), np.nan), index=frame.index)\n"
+    "        feats['steps_since_nonzero'] = np.arange(len(frame)) - idx.groupby(KEYS).ffill().values\n"
+    "    dt = frame[D]\n"
+    "    if FKEY in ('min', 'h'):\n"
+    "        feats['hour'] = dt.dt.hour\n"
+    "    if FKEY in ('min', 'h', 'D'):\n"
+    "        feats['dow'] = dt.dt.dayofweek\n"
+    "        feats['dom'] = dt.dt.day\n"
+    "        feats['is_month_start'] = dt.dt.is_month_start.astype(int)\n"
+    "        feats['is_month_end'] = dt.dt.is_month_end.astype(int)\n"
+    "    if FKEY in ('min', 'h', 'D', 'W'):\n"
+    "        feats['week'] = dt.dt.isocalendar().week.astype(int).values\n"
+    "    feats['month'] = dt.dt.month\n"
+    "    feats['year'] = dt.dt.year\n"
+    "    feats['series_age'] = frame.groupby('series').cumcount()\n"
+    "    for c in EXOG_KNOWN:\n"
+    "        feats[c] = frame[c]\n"
+    "        if frame[c].nunique() > 2:\n"
+    "            past = frame.groupby('series')[c].shift(1)\n"
+    "            ref = past.groupby(KEYS).rolling(4 * M, min_periods=1).mean().reset_index(level=0, drop=True)\n"
+    "            feats[f'{c}_rel'] = frame[c] / ref.replace(0, np.nan)\n"
+    "    for c in EXOG_PAST:\n"
+    "        feats[f'{c}_lag'] = frame.groupby('series')[c].shift(MIN_LAG)\n"
+    "    out = pd.DataFrame(feats, index=frame.index)\n"
+    "    out = out.join(event_features(dt))\n"
+    "    for c in IDS + ['series']:\n"
+    "        out[f'id_{c}'] = pd.Categorical(frame[c].astype(str), categories=sorted(data[c].astype(str).unique())) if c in frame else np.nan\n"
+    "    return out\n"
+    "\n"
+    "t0 = time.time()\n"
+    "FEAT = build_features(data)\n"
+    "FEATURES = FEAT.columns.tolist()\n"
+    "CAT_FEATURES = [c for c in FEATURES if c.startswith('id_')]\n"
+    "data['valid'] = FEAT[f'lag_{LAGS[0]}'].notna() if LAGS else True\n"
+    "\n"
+    "def family(c):\n"
+    "    for k, v in (('lag_', 'lags'), ('roll_', 'rolling'), ('ewm_', 'rolling'), ('same_season', 'same season'), ('nonzero', 'intermittency'),\n"
+    "                 ('steps_since', 'intermittency'), ('event', 'events'), ('days_', 'events'), ('id_', 'identity'), ('series_age', 'identity')):\n"
+    "        if c.startswith(k):\n"
+    "            return v\n"
+    "    if c in EXOG_KNOWN or c.endswith('_rel') or c.endswith('_lag'):\n"
+    "        return 'covariates'\n"
+    "    return 'calendar'\n"
+    "\n"
+    "inv_tbl = pd.Series([family(c) for c in FEATURES], index=FEATURES).value_counts().rename('features').to_frame()\n"
+    "print(f'{len(FEATURES)} features built in {time.time() - t0:.1f}s (strategy {STRATEGY}, min lag {MIN_LAG}, intermittency features: {INTERMITTENT_FEATURES})')\n"
+    "display(inv_tbl)\n"
+    "pd.DataFrame({'feature': FEATURES, 'family': [family(c) for c in FEATURES]}).to_csv(CFG.FINAL_DIR / 'feature_inventory.csv', index=False)"
+))
+
+cells.append(md(
+    "#### Insights\n\n"
+    "> *Fill in after running.* Which feature families were built, and which EDA finding motivated "
+    "each one? Mention the event calendar used and the reason behind the minimum lag."
+))
+
+# ---------------------------------------------------------------------------
+# Section 7: Backtesting Design
+# ---------------------------------------------------------------------------
+cells.append(section("Backtesting Design", "7"))
+
+cells.append(md(
+    "Forecasts are validated with an expanding-window backtest that mimics deployment: at each "
+    "cutoff the model sees only the past and forecasts the next `HORIZON` steps. Folds are placed at "
+    "the end of the history, one horizon apart, because the most recent behaviour is the most "
+    "relevant. Only originally observed values are scored, never filled gaps. MASE scales are "
+    "computed per series from data before each cutoff."
+))
+
+cells.append(code(
+    "data['observed'] = raw.groupby(['series', D])[Y].sum().reindex(pd.MultiIndex.from_frame(data[['series', D]])).notna().values\n"
+    "hist_dates = np.sort(data.loc[~data['is_future'], D].unique())\n"
+    "CUTOFFS = [pd.Timestamp(hist_dates[-(k * HORIZON) - 1]) for k in range(N_FOLDS, 0, -1)]\n"
+    "STEP = {d: i for i, d in enumerate(pd.date_range(hist_dates[0], FUTURE_DATES[-1], freq=FREQ))}\n"
+    "data['t_idx'] = data[D].map(STEP)\n"
+    "WIDE = data[~data['is_future']].pivot(index=D, columns='series', values='y_raw')\n"
+    "\n"
+    "def scales(cutoff):\n"
+    "    h = WIDE.loc[:cutoff]\n"
+    "    s = (h - h.shift(M)).abs().mean()\n"
+    "    return s.where(s > 0, h.diff().abs().mean()).fillna(1.0).clip(lower=1e-6)\n"
+    "\n"
+    "def val_mask(cutoff):\n"
+    "    t = STEP[pd.Timestamp(cutoff)]\n"
+    "    return (data['t_idx'] > t) & (data['t_idx'] <= t + HORIZON) & ~data['is_future']\n"
+    "\n"
+    "fold_tbl = pd.DataFrame([{'fold': k + 1, 'cutoff': c.date(), 'train_rows': int(((data[D] <= c) & data['valid']).sum()),\n"
+    "                          'valid_rows': int((val_mask(c) & data['observed']).sum())} for k, c in enumerate(CUTOFFS)]).set_index('fold')\n"
+    "display(fold_tbl)\n"
+    "\n"
+    "fig, ax = plt.subplots(figsize=(15, 0.5 * N_FOLDS + 1.8))\n"
+    "start = pd.Timestamp(hist_dates[0])\n"
+    "for k, c in enumerate(CUTOFFS):\n"
+    "    end = data.loc[val_mask(c), D].max()\n"
+    "    ax.barh(k, mdates.date2num(c) - mdates.date2num(start), left=mdates.date2num(start), color=SOFT, height=0.6)\n"
+    "    ax.barh(k, mdates.date2num(end) - mdates.date2num(c), left=mdates.date2num(c), color=ACCENT, height=0.6)\n"
+    "ax.barh(N_FOLDS, mdates.date2num(FUTURE_DATES[-1]) - mdates.date2num(LAST), left=mdates.date2num(LAST), color=DARK, height=0.6)\n"
+    "ax.set_yticks(range(N_FOLDS + 1))\n"
+    "ax.set_yticklabels([f'fold {k + 1}' for k in range(N_FOLDS)] + ['final forecast'])\n"
+    "ax.xaxis_date()\n"
+    "date_axis(ax)\n"
+    "handles = [mpl.patches.Patch(color=c, label=l) for c, l in ((SOFT, 'train'), (ACCENT, 'validate'), (DARK, 'forecast'))]\n"
+    "ax.legend(handles=handles, loc='upper left', ncol=3)\n"
+    "suptitle(fig, 'Expanding-window backtest', f'{N_FOLDS} folds of {HORIZON} steps at frequency {FREQ}')\n"
+    "save_fig(fig, 'backtest_design', 'final')"
+))
+
+# ---------------------------------------------------------------------------
+# Section 8: Statistical Baselines
+# ---------------------------------------------------------------------------
+cells.append(section("Statistical Baselines", "8"))
+
+cells.append(md(
+    "Four per-series baselines run on every fold. Naive repeats the last value, seasonal naive "
+    "repeats the last season, moving average forecasts the mean of the last season, and ETS "
+    "(Holt-Winters exponential smoothing with damped trend and additive seasonality on the "
+    "transformed target) is fitted when the number of series is manageable. They need no features "
+    "and set the bar that the gradient boosting models must clear."
+))
+
+cells.append(code(
+    "def baseline_forecast(name, y, H):\n"
+    "    y = np.asarray(y, dtype=float)\n"
+    "    y = y[~np.isnan(y)]\n"
+    "    if len(y) == 0:\n"
+    "        return np.zeros(H)\n"
+    "    if name == 'naive' or len(y) < M:\n"
+    "        return np.repeat(y[-1], H)\n"
+    "    if name == 'seasonal_naive':\n"
+    "        return np.resize(y[-M:], H)\n"
+    "    if name == 'moving_average':\n"
+    "        return np.repeat(y[-M:].mean(), H)\n"
+    "    try:\n"
+    "        yy = fwd(y[-min(len(y), 20 * M + 2 * H):])\n"
+    "        seasonal = 'add' if M > 1 and len(yy) >= 2 * M + 2 else None\n"
+    "        fit = ExponentialSmoothing(yy, trend='add', damped_trend=True, seasonal=seasonal,\n"
+    "                                   seasonal_periods=M if seasonal else None, initialization_method='estimated').fit()\n"
+    "        return inv(fit.forecast(H))\n"
+    "    except Exception:\n"
+    "        return np.resize(y[-M:], H)\n"
+    "\n"
+    "BASELINES = [b for b in CFG.BASELINES if b != 'ets' or len(SERIES) <= CFG.ETS_MAX_SERIES]\n"
+    "BT = {}\n"
+    "t0 = time.time()\n"
+    "for name in BASELINES:\n"
+    "    rows = []\n"
+    "    for k, c in enumerate(CUTOFFS):\n"
+    "        sc = scales(c)\n"
+    "        vm = data[val_mask(c)]\n"
+    "        for s, g in vm.groupby('series'):\n"
+    "            hist_s = WIDE[s].loc[:c].dropna()\n"
+    "            if len(hist_s) == 0:\n"
+    "                continue\n"
+    "            fc = baseline_forecast(name, hist_s.values, len(g))\n"
+    "            rows.append(pd.DataFrame({'series': s, D: g[D].values, 'fold': k + 1, 'h': np.arange(1, len(g) + 1),\n"
+    "                                      'y_true': g['y_raw'].values, 'y_pred': np.clip(fc, 0, None) if NON_NEG else fc,\n"
+    "                                      'scale': sc[s], 'observed': g['observed'].values}))\n"
+    "    bt = pd.concat(rows, ignore_index=True)\n"
+    "    BT[name] = bt[bt['observed']].drop(columns='observed').reset_index(drop=True)\n"
+    "    print(f'  [{name}] done ({time.time() - t0:.0f}s)')\n"
+    "\n"
+    "def summarize(bt):\n"
+    "    per_fold = pd.DataFrame([metrics(g) for _, g in bt.groupby('fold')])\n"
+    "    return per_fold.mean().to_dict(), per_fold\n"
+    "\n"
+    "rows = []\n"
+    "for name, bt in BT.items():\n"
+    "    mean, per_fold = summarize(bt)\n"
+    "    rows.append({'model': name, **mean, f'{METRIC}_std': per_fold[METRIC].std()})\n"
+    "base_lb = pd.DataFrame(rows).set_index('model').sort_values(METRIC)\n"
+    "BEST_BASELINE = base_lb.index[0]\n"
+    "base_lb.to_csv(CFG.BASELINE_DIR / 'baseline_leaderboard.csv')\n"
+    "for name, bt in BT.items():\n"
+    "    bt.to_csv(CFG.BASELINE_DIR / f'backtest_{name}.csv', index=False)\n"
+    "display(base_lb.round(4))\n"
+    "print(f'Best baseline: {BEST_BASELINE} ({METRIC} {base_lb.loc[BEST_BASELINE, METRIC]:.4f})')\n"
+    "\n"
+    "fig, axes = plt.subplots(1, 2, figsize=(16, 4.6))\n"
+    "axes[0].barh(base_lb.index[::-1], base_lb[METRIC][::-1], xerr=base_lb[f'{METRIC}_std'][::-1],\n"
+    "             color=[ACCENT if m == BEST_BASELINE else PRIMARY for m in base_lb.index[::-1]], error_kw=dict(ecolor=DARK, lw=1, capsize=3))\n"
+    "bar_labels(axes[0], '{:.3f}')\n"
+    "axes[0].set_title(f'Backtest {METRIC} (mean over folds, whiskers = std)', loc='left')\n"
+    "for i, (name, bt) in enumerate(BT.items()):\n"
+    "    byh = bt.groupby('h').apply(lambda g: metrics(g)[METRIC])\n"
+    "    axes[1].plot(byh.index, byh.values, marker='o', ms=3, lw=1.8, color=PALETTE[i % 10], label=name)\n"
+    "axes[1].set_xlabel('steps ahead')\n"
+    "axes[1].set_ylabel(METRIC)\n"
+    "axes[1].legend(fontsize=8)\n"
+    "axes[1].set_title('Error by forecast step', loc='left')\n"
+    "suptitle(fig, 'Statistical baselines', f'{N_FOLDS} folds x {HORIZON} steps x {len(SERIES)} series')\n"
+    "save_fig(fig, 'baseline_backtest', 'baseline')"
+))
+
+cells.append(md(
+    "#### Insights\n\n"
+    "> *Fill in after running.* Which baseline wins, and how does its error grow with the forecast "
+    "step? A strong seasonal naive means seasonality dominates. A strong moving average means the "
+    "series are noisy around a stable level."
+))
+
+# ---------------------------------------------------------------------------
+# Section 9: Gradient Boosting Forecasters
+# ---------------------------------------------------------------------------
+cells.append(section("Gradient Boosting Forecasters", "9"))
+
+cells.append(md(
+    "A single global model per library is trained on all series. Inside each fold, the last "
+    "`HORIZON` steps of the training window serve as an early-stopping set (never the validation "
+    "window, which would leak), the best iteration is recorded, and the model is refitted on the "
+    "full training window with that many trees. The direct strategy predicts the whole validation "
+    "window in one pass. The recursive strategy predicts one step at a time and feeds each "
+    "prediction back into the lag features. The objective and sample weights come from section 4."
+))
+
+cells.append(code(
+    "class GBM:\n"
+    "    def __init__(self, kind, n_iter=None):\n"
+    "        self.kind, self.n_iter = kind, n_iter\n"
+    "\n"
+    "    def _params(self, n):\n"
+    "        tw = OBJECTIVE == 'tweedie'\n"
+    "        if self.kind == 'lightgbm':\n"
+    "            p = dict(n_estimators=n, learning_rate=CFG.LEARNING_RATE, num_leaves=63, min_child_samples=30,\n"
+    "                     subsample=0.8, subsample_freq=1, colsample_bytree=0.8, reg_lambda=1.0, random_state=CFG.SEED,\n"
+    "                     n_jobs=-1, verbose=-1, objective='tweedie' if tw else 'regression')\n"
+    "            if tw:\n"
+    "                p['tweedie_variance_power'] = 1.3\n"
+    "        elif self.kind == 'xgboost':\n"
+    "            p = dict(n_estimators=n, learning_rate=CFG.LEARNING_RATE, max_depth=7, min_child_weight=5, subsample=0.8,\n"
+    "                     colsample_bytree=0.8, reg_lambda=1.0, tree_method='hist', enable_categorical=True, random_state=CFG.SEED,\n"
+    "                     n_jobs=-1, objective='reg:tweedie' if tw else 'reg:squarederror')\n"
+    "            if tw:\n"
+    "                p['tweedie_variance_power'] = 1.3\n"
+    "            if CFG.USE_GPU:\n"
+    "                p['device'] = 'cuda'\n"
+    "        else:\n"
+    "            p = dict(iterations=n, learning_rate=CFG.LEARNING_RATE * 2, depth=7, l2_leaf_reg=3.0, random_seed=CFG.SEED, verbose=0,\n"
+    "                     allow_writing_files=False, thread_count=-1, loss_function='Tweedie:variance_power=1.3' if tw else 'RMSE')\n"
+    "            if CFG.USE_GPU:\n"
+    "                p['task_type'] = 'GPU'\n"
+    "        p.update(CFG.MODEL_PARAMS.get(self.kind, {}))\n"
+    "        return p\n"
+    "\n"
+    "    def _prep(self, X):\n"
+    "        if self.kind != 'catboost':\n"
+    "            return X\n"
+    "        X = X.copy()\n"
+    "        for c in CAT_FEATURES:\n"
+    "            X[c] = X[c].astype(str)\n"
+    "        return X\n"
+    "\n"
+    "    def fit(self, X, y, w=None, X_es=None, y_es=None, w_es=None):\n"
+    "        n = self.n_iter or CFG.N_ESTIMATORS\n"
+    "        Xp = self._prep(X)\n"
+    "        es = X_es is not None and self.n_iter is None\n"
+    "        if self.kind == 'lightgbm':\n"
+    "            self.model = lgb.LGBMRegressor(**self._params(n))\n"
+    "            kw = dict(eval_set=[(X_es, y_es)], eval_sample_weight=[w_es], callbacks=[lgb.early_stopping(CFG.EARLY_STOPPING, verbose=False)]) if es else {}\n"
+    "            self.model.fit(Xp, y, sample_weight=w, **kw)\n"
+    "            self.best = self.model.best_iteration_ if es and self.model.best_iteration_ else n\n"
+    "        elif self.kind == 'xgboost':\n"
+    "            p = self._params(n)\n"
+    "            if es:\n"
+    "                p['early_stopping_rounds'] = CFG.EARLY_STOPPING\n"
+    "            self.model = xgb.XGBRegressor(**p)\n"
+    "            self.model.fit(Xp, y, sample_weight=w, eval_set=[(X_es, y_es)] if es else None,\n"
+    "                           sample_weight_eval_set=[w_es] if es and w_es is not None else None, verbose=False)\n"
+    "            self.best = (self.model.best_iteration + 1) if es else n\n"
+    "        else:\n"
+    "            p = self._params(n)\n"
+    "            if es:\n"
+    "                p['early_stopping_rounds'] = CFG.EARLY_STOPPING\n"
+    "            self.model = CatBoostRegressor(**p)\n"
+    "            self.model.fit(Pool(Xp, y, cat_features=CAT_FEATURES, weight=w),\n"
+    "                           eval_set=Pool(self._prep(X_es), y_es, cat_features=CAT_FEATURES, weight=w_es) if es else None,\n"
+    "                           use_best_model=es)\n"
+    "            self.best = (self.model.get_best_iteration() + 1) if es else n\n"
+    "        return self\n"
+    "\n"
+    "    def predict(self, X):\n"
+    "        return np.asarray(self.model.predict(self._prep(X)), dtype=float)\n"
+    "\n"
+    "    def importance(self):\n"
+    "        if self.kind == 'lightgbm':\n"
+    "            v = self.model.booster_.feature_importance('gain')\n"
+    "        elif self.kind == 'xgboost':\n"
+    "            v = pd.Series(self.model.get_booster().get_score(importance_type='total_gain')).reindex(FEATURES).fillna(0).values\n"
+    "        else:\n"
+    "            v = self.model.get_feature_importance()\n"
+    "        s = pd.Series(v, index=FEATURES, dtype=float)\n"
+    "        return s / max(s.sum(), 1e-12)\n"
+    "\n"
+    "    def contributions(self, X):\n"
+    "        if self.kind == 'lightgbm':\n"
+    "            return np.asarray(self.model.predict(X, pred_contrib=True))[:, :-1]\n"
+    "        if self.kind == 'xgboost':\n"
+    "            return self.model.get_booster().predict(xgb.DMatrix(X, enable_categorical=True), pred_contribs=True)[:, :-1]\n"
+    "        return self.model.get_feature_importance(Pool(self._prep(X), cat_features=CAT_FEATURES), type='ShapValues')[:, :-1]\n"
+    "\n"
+    "def volume_weights(mask, cutoff):\n"
+    "    if not WEIGHT_BY_VOLUME:\n"
+    "        return None\n"
+    "    vol = WIDE.loc[:cutoff].tail(4 * max(M, HORIZON)).mean().clip(lower=1e-3)\n"
+    "    w = data.loc[mask, 'series'].map(vol).values\n"
+    "    return w / w.mean()"
+))
+
+cells.append(md(
+    "## Recursive Forecasting Helper\n\n"
+    "For the recursive strategy, the target after the cutoff is hidden, then each step is predicted "
+    "and written back before the features of the next step are rebuilt. Only a recent tail of each "
+    "series is used to rebuild features, which keeps the loop fast."
+))
+
+cells.append(code(
+    "TAIL = max(LAGS + ROLL_WINDOWS + [4 * M]) + 2 * HORIZON + 5\n"
+    "\n"
+    "def recursive_predict(model, cutoff, dates):\n"
+    "    work = data[data['t_idx'] >= STEP[pd.Timestamp(cutoff)] - TAIL].copy()\n"
+    "    work.loc[work[D] > cutoff, 'y'] = np.nan\n"
+    "    out = {}\n"
+    "    for d in dates:\n"
+    "        sub = work[work[D] <= d]\n"
+    "        Xd = build_features(sub).loc[sub[D] == d, FEATURES]\n"
+    "        p = model.predict(Xd)\n"
+    "        work.loc[Xd.index, 'y'] = p\n"
+    "        out.update(dict(zip(Xd.index, p)))\n"
+    "    return pd.Series(out)"
+))
+
+cells.append(md(
+    "## Backtest Loop\n\n"
+    "Every active model runs over all folds. The backtest predictions, best iterations, gain "
+    "importances, and the last fold's model (for interpretation) are stored."
+))
+
+cells.append(code(
+    "def es_split(cutoff):\n"
+    "    es_cut = pd.Timestamp(hist_dates[np.searchsorted(hist_dates, np.datetime64(cutoff)) - HORIZON])\n"
+    "    return es_cut\n"
+    "\n"
+    "def train_mask(cutoff):\n"
+    "    return (data[D] <= cutoff) & data['valid'] & data['y'].notna() & ~data['is_future']\n"
+    "\n"
+    "GBM_INFO = {}\n"
+    "for kind in MODELS:\n"
+    "    rows, iters, imps, t0 = [], [], [], time.time()\n"
+    "    for k, c in enumerate(CUTOFFS):\n"
+    "        feat = FEAT if STRATEGY == 'direct' else build_features(data.assign(y=data['y'].where(data[D] <= c)))\n"
+    "        tr = train_mask(c)\n"
+    "        es_cut = es_split(c)\n"
+    "        fit_m, es_m = tr & (data[D] <= es_cut), tr & (data[D] > es_cut)\n"
+    "        m = GBM(kind).fit(feat.loc[fit_m, FEATURES], data.loc[fit_m, 'y'], volume_weights(fit_m, es_cut),\n"
+    "                          feat.loc[es_m, FEATURES], data.loc[es_m, 'y'], volume_weights(es_m, es_cut))\n"
+    "        best = m.best\n"
+    "        if CFG.REFIT_IN_FOLD:\n"
+    "            m = GBM(kind, n_iter=max(best, 50)).fit(feat.loc[tr, FEATURES], data.loc[tr, 'y'], volume_weights(tr, c))\n"
+    "        vm = val_mask(c)\n"
+    "        if STRATEGY == 'direct':\n"
+    "            pred = pd.Series(m.predict(FEAT.loc[vm, FEATURES]), index=data.index[vm])\n"
+    "        else:\n"
+    "            pred = recursive_predict(m, c, sorted(data.loc[vm, D].unique()))\n"
+    "        sc = scales(c)\n"
+    "        v = data.loc[vm].copy()\n"
+    "        v['y_pred'] = inv(pred.reindex(v.index).values)\n"
+    "        v['h'] = v['t_idx'] - STEP[c]\n"
+    "        v = v[v['observed']]\n"
+    "        rows.append(pd.DataFrame({'series': v['series'].values, D: v[D].values, 'fold': k + 1, 'h': v['h'].values,\n"
+    "                                  'y_true': v['y_raw'].values, 'y_pred': v['y_pred'].values, 'scale': v['series'].map(sc).values}))\n"
+    "        iters.append(best)\n"
+    "        imps.append(m.importance())\n"
+    "        print(f'  [{kind}] fold {k + 1}/{N_FOLDS} cutoff {c.date()} best_iter {best} {METRIC} {metrics(rows[-1])[METRIC]:.4f} ({time.time() - t0:.0f}s)')\n"
+    "    BT[kind] = pd.concat(rows, ignore_index=True)\n"
+    "    GBM_INFO[kind] = {'iters': iters, 'importance': pd.concat(imps, axis=1).mean(axis=1), 'last_model': m, 'last_cutoff': c, 'time': time.time() - t0}\n"
+    "    BT[kind].to_csv(CFG.FINAL_DIR / 'backtests' / f'backtest_{kind}.csv', index=False)\n"
+    "if not MODELS:\n"
+    "    note('No boosting library is available, so the pipeline continues with the statistical baselines.')"
+))
+
+cells.append(md(
+    "#### Insights\n\n"
+    "> *Fill in after running.* How many trees did early stopping choose, and are they stable across "
+    "folds? Does each boosting model beat the best baseline in every fold?"
+))
+
+# ---------------------------------------------------------------------------
+# Section 10: Ensemble and Model Selection
+# ---------------------------------------------------------------------------
+cells.append(section("Ensemble and Model Selection", "10"))
+
+cells.append(md(
+    "The boosting models and the best baseline are blended with non-negative weights summing to "
+    "one, fitted on the backtest forecasts by minimising mean absolute error (the numerator of WAPE). "
+    "Statistical and machine learning forecasts often fail in different situations, so the blend "
+    "is usually more robust than either. The selected model is the candidate with the lowest mean "
+    "backtest error across folds."
+))
+
+cells.append(code(
+    "KEY = ['series', D, 'fold']\n"
+    "cands = MODELS + [BEST_BASELINE]\n"
+    "WEIGHTS = None\n"
+    "if CFG.ENSEMBLE and len(cands) >= 2:\n"
+    "    merged = BT[cands[0]][KEY + ['h', 'y_true', 'scale']].copy()\n"
+    "    for c in cands:\n"
+    "        merged = merged.merge(BT[c][KEY + ['y_pred']].rename(columns={'y_pred': c}), on=KEY, how='inner')\n"
+    "    P = merged[cands].values\n"
+    "    yt = merged['y_true'].values\n"
+    "    n = len(cands)\n"
+    "    opt = minimize(lambda w: np.abs(yt - P @ w).mean(), np.full(n, 1 / n), method='SLSQP',\n"
+    "                   bounds=[(0, 1)] * n, constraints={'type': 'eq', 'fun': lambda w: w.sum() - 1})\n"
+    "    WEIGHTS = {c: round(float(w), 4) for c, w in zip(cands, opt.x)}\n"
+    "    BT['ensemble'] = merged[KEY + ['h', 'y_true', 'scale']].assign(y_pred=P @ opt.x)\n"
+    "    BT['ensemble'].to_csv(CFG.FINAL_DIR / 'backtests' / 'backtest_ensemble.csv', index=False)\n"
+    "    print('Ensemble weights:', WEIGHTS)\n"
+    "\n"
+    "rows = []\n"
+    "for name, bt in BT.items():\n"
+    "    mean, per_fold = summarize(bt)\n"
+    "    rows.append({'model': name, 'type': 'baseline' if name in BASELINES else 'ensemble' if name == 'ensemble' else 'gbm',\n"
+    "                 **mean, f'{METRIC}_std': per_fold[METRIC].std(), 'folds_beating_best_baseline':\n"
+    "                 int((per_fold[METRIC].values < summarize(BT[BEST_BASELINE])[1][METRIC].values).sum()) if name != BEST_BASELINE else np.nan})\n"
+    "LEADERBOARD = pd.DataFrame(rows).set_index('model').sort_values(METRIC)\n"
+    "BEST = LEADERBOARD.index[0]\n"
+    "LEADERBOARD.to_csv(CFG.FINAL_DIR / 'leaderboard.csv')\n"
+    "display(LEADERBOARD.round(4))\n"
+    "gain = (1 - LEADERBOARD.loc[BEST, METRIC] / LEADERBOARD.loc[BEST_BASELINE, METRIC]) * 100\n"
+    "print(f'Selected: {BEST} ({METRIC} {LEADERBOARD.loc[BEST, METRIC]:.4f}), {gain:+.1f}% vs best baseline {BEST_BASELINE}')\n"
+    "\n"
+    "lb = LEADERBOARD.iloc[::-1]\n"
+    "fig, axes = plt.subplots(1, 2 if WEIGHTS else 1, figsize=(17 if WEIGHTS else 10, 0.5 * len(lb) + 2.2), squeeze=False)\n"
+    "colors = [ACCENT if m == BEST else MUTED if lb.loc[m, 'type'] == 'baseline' else PRIMARY for m in lb.index]\n"
+    "axes[0, 0].barh(lb.index, lb[METRIC], xerr=lb[f'{METRIC}_std'], color=colors, error_kw=dict(ecolor=DARK, lw=1, capsize=3))\n"
+    "bar_labels(axes[0, 0], '{:.3f}')\n"
+    "axes[0, 0].set_title(f'Backtest {METRIC} (mean over {N_FOLDS} folds)', loc='left')\n"
+    "if WEIGHTS:\n"
+    "    w = pd.Series(WEIGHTS).sort_values()\n"
+    "    axes[0, 1].barh(w.index, w.values, color=PALETTE[2])\n"
+    "    bar_labels(axes[0, 1], '{:.2f}')\n"
+    "    axes[0, 1].set_title('Ensemble weights', loc='left')\n"
+    "suptitle(fig, 'Forecast model leaderboard', f'selected: {BEST} (orange); baselines in grey')\n"
+    "save_fig(fig, 'leaderboard', 'final')"
+))
+
+cells.append(md(
+    "#### Insights\n\n"
+    "> *Fill in after running.* Which model is selected, by how much does it beat the best baseline, "
+    "and in how many folds? How is the ensemble weight split between machine learning and "
+    "statistical forecasts?"
+))
+
+# ---------------------------------------------------------------------------
+# Section 11: Backtest Diagnostics
+# ---------------------------------------------------------------------------
+cells.append(section("Backtest Diagnostics", "11"))
+
+cells.append(md(
+    "Aggregate scores hide where forecasts fail. Error is broken down by forecast step (does "
+    "accuracy decay with distance?), by series (which series are hard, and does the model beat the "
+    "baseline on them?), and by the EDA demand class (smooth versus intermittent). Actual and "
+    "forecast paths for the largest series on the last fold make the comparison concrete."
+))
+
+cells.append(code(
+    "fig, axes = plt.subplots(1, 2, figsize=(17, 5))\n"
+    "for i, name in enumerate(LEADERBOARD.index):\n"
+    "    byh = BT[name].groupby('h').apply(lambda g: metrics(g)[METRIC])\n"
+    "    is_base = name in BASELINES\n"
+    "    axes[0].plot(byh.index, byh.values, lw=2.4 if name == BEST else 1.4, ls='--' if is_base else '-',\n"
+    "                 color=ACCENT if name == BEST else PALETTE[i % 10], label=name, alpha=0.9)\n"
+    "axes[0].set_xlabel('steps ahead')\n"
+    "axes[0].set_ylabel(METRIC)\n"
+    "axes[0].legend(fontsize=8)\n"
+    "axes[0].set_title('Error by forecast step (dashed = baselines)', loc='left')\n"
+    "\n"
+    "per_s = pd.DataFrame({n: BT[n].groupby('series').apply(lambda g: metrics(g)[METRIC]) for n in (BEST, BEST_BASELINE)})\n"
+    "vol = WIDE.sum()\n"
+    "axes[1].scatter(per_s[BEST_BASELINE], per_s[BEST], s=20 + 300 * vol.reindex(per_s.index) / vol.max(), color=PRIMARY, alpha=0.7, edgecolor='white')\n"
+    "lim = [0, np.nanmax(per_s.values) * 1.05]\n"
+    "axes[1].plot(lim, lim, color=MUTED, ls='--')\n"
+    "axes[1].set_xlabel(f'{METRIC} of {BEST_BASELINE}')\n"
+    "axes[1].set_ylabel(f'{METRIC} of {BEST}')\n"
+    "share_better = (per_s[BEST] < per_s[BEST_BASELINE]).mean()\n"
+    "axes[1].set_title(f'Per series: {BEST} better on {share_better:.0%} (below diagonal)', loc='left')\n"
+    "suptitle(fig, 'Backtest diagnostics', 'bubble size = series volume')\n"
+    "save_fig(fig, 'backtest_diagnostics', 'final')\n"
+    "per_s.to_csv(CFG.FINAL_DIR / 'error_by_series.csv')\n"
+    "\n"
+    "cls_path = Path(CFG.EDA_DIR) / 'tables' / 'intermittency.csv'\n"
+    "if cls_path.exists():\n"
+    "    cls = pd.read_csv(cls_path).set_index('series')['demand_class']\n"
+    "    by_cls = pd.DataFrame({n: BT[n].assign(c=BT[n]['series'].map(cls)).groupby('c').apply(lambda g: metrics(g)[METRIC]) for n in LEADERBOARD.index})\n"
+    "    by_cls.to_csv(CFG.FINAL_DIR / 'error_by_demand_class.csv')\n"
+    "    display(by_cls.round(3))"
+))
+
+cells.append(code(
+    "last = BT[BEST][BT[BEST]['fold'] == N_FOLDS]\n"
+    "top = WIDE.sum().sort_values(ascending=False).index[:6]\n"
+    "fig, axes = plt.subplots(2, 3, figsize=(18, 7.5), squeeze=False)\n"
+    "c = CUTOFFS[-1]\n"
+    "for ax, s in zip(axes.ravel(), top):\n"
+    "    h = WIDE[s].loc[:c].tail(4 * HORIZON)\n"
+    "    ax.plot(h.index, h.values, color=MUTED, lw=1, label='history')\n"
+    "    g = last[last['series'] == s]\n"
+    "    ax.plot(g[D], g['y_true'], color=DARK, lw=1.4, label='actual')\n"
+    "    ax.plot(g[D], g['y_pred'], color=ACCENT, lw=2, label=BEST)\n"
+    "    b = BT[BEST_BASELINE][(BT[BEST_BASELINE]['fold'] == N_FOLDS) & (BT[BEST_BASELINE]['series'] == s)]\n"
+    "    ax.plot(b[D], b['y_pred'], color=PRIMARY, lw=1.4, ls='--', label=BEST_BASELINE)\n"
+    "    ax.axvline(c, color=MUTED, ls=':', lw=1)\n"
+    "    ax.set_title(short(s, 30), loc='left', fontsize=10)\n"
+    "    date_axis(ax)\n"
+    "axes[0, 0].legend(fontsize=8)\n"
+    "suptitle(fig, f'Last backtest fold: actual vs forecast', f'cutoff {c.date()}, top 6 series by volume')\n"
+    "save_fig(fig, 'backtest_paths', 'final')"
+))
+
+cells.append(md(
+    "#### Insights\n\n"
+    "> *Fill in after running.* Does error grow with the horizon, and where does the model lose to the "
+    "baseline? Are intermittent series the main weakness? Do forecasts capture the weekly shape and "
+    "the event peaks, or are they too flat?"
+))
+
+# ---------------------------------------------------------------------------
+# Section 12: Model Interpretation
+# ---------------------------------------------------------------------------
+cells.append(section("Model Interpretation", "12"))
+
+cells.append(md(
+    "Gain importance (averaged over folds) shows which features the trees rely on, and exact "
+    "TreeSHAP contributions on the last fold's validation rows show how much each feature moves the "
+    "forecasts. Importance aggregated by feature family checks the EDA story: if lags and rolling "
+    "means dominate, history drives the forecast; if events or covariates matter, the business "
+    "drivers do."
+))
+
+cells.append(code(
+    "GBM_RANKED = [m for m in LEADERBOARD.index if m in MODELS]\n"
+    "if not GBM_RANKED:\n"
+    "    note('No boosting model was trained, so there is nothing to interpret.')\n"
+    "else:\n"
+    "    kind = GBM_RANKED[0]\n"
+    "    info = GBM_INFO[kind]\n"
+    "    vm = val_mask(info['last_cutoff'])\n"
+    "    feat_last = FEAT if STRATEGY == 'direct' else build_features(data.assign(y=data['y'].where(data[D] <= info['last_cutoff'])))\n"
+    "    Xs = feat_last.loc[vm, FEATURES]\n"
+    "    Xs = Xs.sample(min(3000, len(Xs)), random_state=CFG.SEED)\n"
+    "    shap_abs = pd.Series(np.abs(info['last_model'].contributions(Xs)).mean(axis=0), index=FEATURES)\n"
+    "    imp = pd.DataFrame({'gain_share': info['importance'], 'mean_abs_shap': shap_abs}).sort_values('mean_abs_shap', ascending=False)\n"
+    "    imp['family'] = [family(c) for c in imp.index]\n"
+    "    imp.to_csv(CFG.FINAL_DIR / 'feature_importance.csv')\n"
+    "    fam = imp.groupby('family')[['gain_share', 'mean_abs_shap']].sum()\n"
+    "    fam = fam / fam.sum()\n"
+    "\n"
+    "    fig, axes = plt.subplots(1, 2, figsize=(17, 6.5), gridspec_kw={'width_ratios': [1.5, 1]})\n"
+    "    t = imp.head(20).iloc[::-1]\n"
+    "    fam_colors = {f: PALETTE[i % 10] for i, f in enumerate(sorted(fam.index))}\n"
+    "    axes[0].barh(t.index, t['mean_abs_shap'], color=[fam_colors[f] for f in t['family']])\n"
+    "    axes[0].set_title(f'Top 20 features by mean |SHAP| ({kind})', loc='left')\n"
+    "    handles = [mpl.patches.Patch(color=v, label=k) for k, v in fam_colors.items()]\n"
+    "    axes[0].legend(handles=handles, fontsize=8, loc='lower right')\n"
+    "    f2 = fam.sort_values('mean_abs_shap')\n"
+    "    axes[1].barh(f2.index, f2['mean_abs_shap'], color=[fam_colors[f] for f in f2.index])\n"
+    "    bar_labels(axes[1], '{:.0%}')\n"
+    "    axes[1].set_title('Share of impact by feature family', loc='left')\n"
+    "    suptitle(fig, 'What drives the forecasts?', f'TreeSHAP on {len(Xs):,} rows of the last validation window')\n"
+    "    save_fig(fig, 'feature_importance', 'final')"
+))
+
+cells.append(md(
+    "#### Insights\n\n"
+    "> *Fill in after running.* Which features and families drive the forecasts? Do event and promo "
+    "features carry weight, confirming the EDA drivers? Unimportant families can be dropped to "
+    "simplify the model."
+))
+
+# ---------------------------------------------------------------------------
+# Section 13: Final Forecast
+# ---------------------------------------------------------------------------
+cells.append(section("Final Forecast", "13"))
+
+cells.append(md(
+    "Each component of the selected model is refitted on the full history. Boosting models use the "
+    "mean best iteration from the backtest, increased by 10% because the final training set is "
+    "longer. Prediction intervals are empirical: the backtest errors of the selected model, scaled "
+    "by each series' MASE scale and pooled per forecast step, give the `INTERVAL` quantiles, which "
+    "are then rescaled to each series. This makes the intervals honest (they reflect real "
+    "out-of-sample errors) and widen naturally with the horizon."
+))
+
+cells.append(code(
+    "fut_mask = data['is_future']\n"
+    "FC = {}\n"
+    "components = list(WEIGHTS) if BEST == 'ensemble' else [BEST]\n"
+    "for name in components:\n"
+    "    if name in MODELS:\n"
+    "        n_iter = int(np.mean(GBM_INFO[name]['iters']) * 1.1) + 1\n"
+    "        tr = train_mask(LAST)\n"
+    "        m = GBM(name, n_iter=n_iter).fit(FEAT.loc[tr, FEATURES], data.loc[tr, 'y'], volume_weights(tr, LAST))\n"
+    "        if STRATEGY == 'direct':\n"
+    "            pred = pd.Series(m.predict(FEAT.loc[fut_mask, FEATURES]), index=data.index[fut_mask])\n"
+    "        else:\n"
+    "            pred = recursive_predict(m, LAST, list(FUTURE_DATES))\n"
+    "        FC[name] = pd.Series(inv(pred.reindex(data.index[fut_mask]).values), index=data.index[fut_mask])\n"
+    "        print(f'  [{name}] refitted with {n_iter} trees')\n"
+    "    else:\n"
+    "        vals = []\n"
+    "        for s, g in data[fut_mask].groupby('series'):\n"
+    "            fc = baseline_forecast(name, WIDE[s].dropna().values, len(g))\n"
+    "            vals.append(pd.Series(np.clip(fc, 0, None) if NON_NEG else fc, index=g.index))\n"
+    "        FC[name] = pd.concat(vals)\n"
+    "        print(f'  [{name}] forecast from full history')\n"
+    "final_pred = sum(WEIGHTS[n] * FC[n] for n in components) if BEST == 'ensemble' else FC[BEST]\n"
+    "\n"
+    "res = BT[BEST].assign(z=(BT[BEST]['y_true'] - BT[BEST]['y_pred']) / BT[BEST]['scale'])\n"
+    "lo_q, hi_q = (1 - CFG.INTERVAL) / 2, 1 - (1 - CFG.INTERVAL) / 2\n"
+    "qz = res.groupby('h')['z'].quantile([lo_q, hi_q]).unstack()\n"
+    "qz.columns = ['z_lo', 'z_hi']\n"
+    "sc_full = scales(LAST)\n"
+    "forecast = data.loc[fut_mask, ['series', D] + IDS + EXOG_KNOWN].copy()\n"
+    "forecast['h'] = forecast.groupby('series').cumcount() + 1\n"
+    "forecast['forecast'] = final_pred.reindex(forecast.index).values\n"
+    "z = qz.reindex(forecast['h']).ffill().values\n"
+    "s_scale = forecast['series'].map(sc_full).values\n"
+    "forecast['lower'] = forecast['forecast'] + z[:, 0] * s_scale\n"
+    "forecast['upper'] = forecast['forecast'] + z[:, 1] * s_scale\n"
+    "if NON_NEG:\n"
+    "    forecast[['lower', 'upper']] = forecast[['lower', 'upper']].clip(lower=0)\n"
+    "for n in components:\n"
+    "    forecast[f'fc_{n}'] = FC[n].reindex(forecast.index).values\n"
+    "covered = BT[BEST].assign(lo=BT[BEST]['y_pred'] + BT[BEST]['h'].map(qz['z_lo']) * BT[BEST]['scale'],\n"
+    "                          hi=BT[BEST]['y_pred'] + BT[BEST]['h'].map(qz['z_hi']) * BT[BEST]['scale'])\n"
+    "COVERAGE = float(((covered['y_true'] >= covered['lo']) & (covered['y_true'] <= covered['hi'])).mean())\n"
+    "print(f'Forecast rows: {len(forecast):,} | {CFG.INTERVAL:.0%} interval in-sample coverage on backtest: {COVERAGE:.1%}')\n"
+    "display(forecast.head())"
+))
+
+cells.append(md(
+    "## Forecast Plots\n\n"
+    "The aggregate forecast is shown with the recent history, followed by the largest individual "
+    "series, each with its prediction interval."
+))
+
+cells.append(code(
+    "agg_hist = WIDE.sum(axis=1).tail(6 * HORIZON)\n"
+    "agg_fc = forecast.groupby(D)[['forecast', 'lower', 'upper']].sum()\n"
+    "fig, ax = plt.subplots(figsize=(16, 4.8))\n"
+    "ax.plot(agg_hist.index, agg_hist.values, color=PRIMARY, lw=1.4, label='history')\n"
+    "ax.plot(agg_fc.index, agg_fc['forecast'], color=ACCENT, lw=2.2, label=f'forecast ({BEST})')\n"
+    "ax.fill_between(agg_fc.index, agg_fc['lower'], agg_fc['upper'], color=ACCENT, alpha=0.18, label=f'{CFG.INTERVAL:.0%} interval (sum of bounds)')\n"
+    "ax.axvline(LAST, color=MUTED, ls=':', lw=1)\n"
+    "ax.legend(loc='upper left')\n"
+    "date_axis(ax)\n"
+    "suptitle(fig, f'Aggregate forecast: next {HORIZON} steps', f'{len(SERIES)} series summed')\n"
+    "save_fig(fig, 'forecast_aggregate', 'final')\n"
+    "\n"
+    "fig, axes = plt.subplots(2, 3, figsize=(18, 7.5), squeeze=False)\n"
+    "for ax, s in zip(axes.ravel(), top):\n"
+    "    h = WIDE[s].tail(4 * HORIZON)\n"
+    "    f = forecast[forecast['series'] == s]\n"
+    "    ax.plot(h.index, h.values, color=PRIMARY, lw=1)\n"
+    "    ax.plot(f[D], f['forecast'], color=ACCENT, lw=2)\n"
+    "    ax.fill_between(f[D], f['lower'], f['upper'], color=ACCENT, alpha=0.18)\n"
+    "    ax.axvline(LAST, color=MUTED, ls=':', lw=1)\n"
+    "    ax.set_title(short(s, 30), loc='left', fontsize=10)\n"
+    "    date_axis(ax)\n"
+    "suptitle(fig, 'Series forecasts', f'top 6 series by volume, {CFG.INTERVAL:.0%} empirical intervals')\n"
+    "save_fig(fig, 'forecast_series', 'final')"
+))
+
+cells.append(md(
+    "#### Insights\n\n"
+    "> *Fill in after running.* Does the forecast continue the recent level and weekly shape, and does "
+    "it anticipate known events and promotions in the future frame? Is the interval coverage close "
+    "to its nominal level?"
+))
+
+# ---------------------------------------------------------------------------
+# Section 14: Export
+# ---------------------------------------------------------------------------
+cells.append(section("Export", "14"))
+
+cells.append(md(
+    "The submission follows the future frame when one is provided (same rows and keys), otherwise "
+    "the generated future grid. The best baseline's forecast is also written to the baseline folder "
+    "as a fallback submission. The resolved configuration, decision table, leaderboard, backtests, "
+    "and a markdown report complete the export."
+))
+
+cells.append(code(
+    "def to_submission(frame, col):\n"
+    "    out = frame[IDS + [D, col]].rename(columns={col: Y}) if IDS else frame[[D, col]].rename(columns={col: Y})\n"
+    "    if raw_test is not None:\n"
+    "        keys = IDS + [D]\n"
+    "        base = raw_test.drop(columns=['series'], errors='ignore')\n"
+    "        out = base.merge(out.assign(**{k: out[k].astype(base[k].dtype) for k in IDS}), on=keys, how='left')\n"
+    "    return out\n"
+    "\n"
+    "to_submission(forecast, 'forecast').to_csv(CFG.FINAL_DIR / 'submission.csv', index=False)\n"
+    "forecast.to_csv(CFG.FINAL_DIR / 'forecast_full.csv', index=False)\n"
+    "\n"
+    "base_fc = data.loc[fut_mask, ['series', D] + IDS].copy()\n"
+    "vals = []\n"
+    "for s, g in base_fc.groupby('series'):\n"
+    "    fc = baseline_forecast(BEST_BASELINE, WIDE[s].dropna().values, len(g))\n"
+    "    vals.append(pd.Series(np.clip(fc, 0, None) if NON_NEG else fc, index=g.index))\n"
+    "base_fc['forecast'] = pd.concat(vals)\n"
+    "to_submission(base_fc, 'forecast').to_csv(CFG.BASELINE_DIR / 'submission.csv', index=False)\n"
+    "to_json({'best_baseline': BEST_BASELINE, 'metric': METRIC, 'leaderboard': base_lb.round(5).to_dict(orient='index')},\n"
+    "        CFG.BASELINE_DIR / 'metrics.json')\n"
+    "\n"
+    "settings = {k: v for k, v in vars(Settings).items() if not k.startswith('__') and not callable(v)}\n"
+    "resolved = {'freq': FREQ, 'horizon': HORIZON, 'seasonal_periods': SEASONAL_PERIODS, 'transform': TRANSFORM,\n"
+    "            'fill': FILL, 'strategy': STRATEGY, 'lags': LAGS, 'roll_windows': ROLL_WINDOWS, 'objective': OBJECTIVE,\n"
+    "            'weight_by_volume': WEIGHT_BY_VOLUME, 'metric': METRIC, 'n_folds': N_FOLDS, 'cutoffs': [str(c.date()) for c in CUTOFFS],\n"
+    "            'models': MODELS, 'skipped': SKIPPED, 'best': BEST, 'weights': WEIGHTS, 'interval': CFG.INTERVAL,\n"
+    "            'interval_coverage_backtest': COVERAGE, 'features': FEATURES, 'libraries': AVAILABLE}\n"
+    "to_json({'settings': settings, 'resolved': resolved, 'eda_decisions': EDA}, CFG.FINAL_DIR / 'config.json')\n"
+    "\n"
+    "cols = [METRIC, f'{METRIC}_std', 'mase', 'rmse', 'bias']\n"
+    "fmt = lambda v: f'{v:.4f}' if isinstance(v, (float, np.floating)) and not np.isnan(v) else '-'\n"
+    "lines = [f'# Forecasting Report: {DATA_PATH.name}', '', '## Setup',\n"
+    "         f'- {len(SERIES)} series of `{Y}` at frequency **{FREQ}**, history to {LAST.date()}, horizon **{HORIZON}**',\n"
+    "         f'- Strategy **{STRATEGY}**, lags {LAGS}, rolling windows {ROLL_WINDOWS}, transform {TRANSFORM}, objective {OBJECTIVE}',\n"
+    "         f'- Backtest: {N_FOLDS} expanding-window folds (cutoffs {\", \".join(str(c.date()) for c in CUTOFFS)}), metric **{METRIC}**', '',\n"
+    "         '## Decisions', '', '| setting | value | source | why |', '|---|---|---|---|']\n"
+    "lines += [f'| {s} | `{r.value}` | {r.source} | {r.why} |' for s, r in decision_table.iterrows()]\n"
+    "lines += ['', '## Leaderboard', '', '| model | ' + ' | '.join(cols) + ' |', '|---' * (len(cols) + 1) + '|']\n"
+    "for mname, r in LEADERBOARD.iterrows():\n"
+    "    lines.append(f'| {mname}{\" (selected)\" if mname == BEST else \"\"} | ' + ' | '.join(fmt(r.get(c, np.nan)) for c in cols) + ' |')\n"
+    "lines += ['', '## Result',\n"
+    "          f'- Selected **{BEST}**: backtest {METRIC} {LEADERBOARD.loc[BEST, METRIC]:.4f}, {gain:+.1f}% vs best baseline {BEST_BASELINE} ({LEADERBOARD.loc[BEST_BASELINE, METRIC]:.4f})',\n"
+    "          f'- {CFG.INTERVAL:.0%} empirical interval coverage on the backtest: {COVERAGE:.1%}']\n"
+    "if WEIGHTS:\n"
+    "    lines.append('- Ensemble weights: ' + ', '.join(f'{k} {v:.2f}' for k, v in WEIGHTS.items()))\n"
+    "if GBM_RANKED:\n"
+    "    lines += ['', f'## Top features ({GBM_RANKED[0]}, mean |SHAP|)'] + [f'{i + 1}. `{f}` ({r.family})' for i, (f, r) in enumerate(imp.head(10).iterrows())]\n"
+    "report_md = '\\n'.join(lines)\n"
+    "(CFG.FINAL_DIR / 'report.md').write_text(report_md, encoding='utf-8')\n"
+    "display(Markdown(report_md))"
+))
+
+cells.append(md(
+    "The last cell prints the output tree for both stages."
+))
+
+cells.append(code(
+    "for stage in (CFG.BASELINE_DIR, CFG.FINAL_DIR):\n"
+    "    print(f'{stage}/')\n"
+    "    for p in sorted(stage.rglob('*')):\n"
+    "        if p.is_file():\n"
+    "            print(f'   {str(p.relative_to(stage)):<45} {p.stat().st_size / 1e3:>10,.1f} KB')"
+))
+
+cells.append(md(
+    "#### Insights\n\n"
+    "> *Fill in after running.* Summarise the selected model, its backtest error and gain over the "
+    "best baseline, the drivers it relies on, the interval coverage, and how each design choice "
+    "traces back to the EDA."
+))
+
+# ---------------------------------------------------------------------------
+# Notebook writer
+# ---------------------------------------------------------------------------
+nb = {
+    "nbformat": 4,
+    "nbformat_minor": 5,
+    "metadata": {
+        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+        "language_info": {"name": "python", "version": "3.13.0"},
+    },
+    "cells": cells,
+}
+OUT.parent.mkdir(parents=True, exist_ok=True)
+OUT.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
+print(f"Wrote {len(cells)} cells -> {OUT}")

@@ -115,18 +115,18 @@ cells.append(md(
 ))
 
 cells.append(md(
-    "## Dataset\n\n"
-    "*The demo uses the same synthetic retail panel as the forecasting EDA: daily sales for 6 stores x "
-    "5 items with weekly and yearly seasonality, Eid al-Fitr (Lebaran) peaks, promotions, prices, "
-    "intermittent items, gaps, outliers, a late-opening store, and a level shift. The 28-day test "
-    "frame carries future prices and promotions.*\n\n"
+    "## Dataset\n"
+    "\n"
+    "*Any time series in long format works: one row per date (and per series), a date column, a numeric target, optional series identifiers (store, item, region), and optional exogenous columns (price, promotion, weather). Put the files in `data/` next to this notebook, or point `KAGGLE_PATH` / `COLAB_PATH` / `LOCAL_PATH` at the dataset folder.*\n"
+    "\n"
     "```\n"
-    "demo-data/\n"
-    "├── train.csv   (date, store, item, sales, price, promo)\n"
-    "└── test.csv    (date, store, item, price, promo)\n"
-    "eda-output/\n"
-    "└── eda_decisions.json\n"
-    "```"
+    "data/\n"
+    "├── train.csv              (date, ids, target, exogenous)\n"
+    "├── test.csv               (future dates to forecast, optional)\n"
+    "└── sample_submission.csv  (id + target columns, optional)\n"
+    "```\n"
+    "\n"
+    "*With `'auto'` the date column is recognised by name, the target comes from `sample_submission.csv` (or is the only train column missing from the test file), and the remaining text columns become series identifiers. When no data is found and `DEMO_IF_MISSING = True`, a synthetic retail panel is generated in `demo-data/` so the notebook still runs end to end.*"
 ))
 
 cells.append(md(
@@ -157,7 +157,7 @@ cells.append(section("Initialization", "2"))
 
 cells.append(md(
     "## Environment Setup\n\n"
-    "The pipeline runs on CPU. On the demo panel (30 series, about 1,300 days) the full backtest "
+    "The pipeline runs on CPU. On a panel of 30 series and about 1,300 days the full backtest "
     "with three boosting models takes a few minutes. Set `USE_GPU = True` on Kaggle to speed up "
     "XGBoost and CatBoost on large panels."
 ))

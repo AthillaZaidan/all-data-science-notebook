@@ -73,6 +73,23 @@ Kalau file EDA tidak ada, kolom target ditebak dari `sample_submission` (kolom k
 
 Di Kaggle, kalau EDA dan pipeline dijalankan di notebook terpisah, upload `eda-output/` sebagai dataset lalu arahkan `EDA_DIR` ke `/kaggle/input/<nama-dataset>/eda-output`.
 
+### Opsi: satu notebook EDA + pipeline
+
+Tiap folder juga punya **`full_<domain>.ipynb`**, yaitu EDA dan pipeline digabung dalam satu notebook yang jalan dari awal sampai `submission.csv`:
+
+| Domain | Notebook gabungan |
+|---|---|
+| Tabular | [`tabular/full_tabular.ipynb`](tabular/full_tabular.ipynb) |
+| NLP | [`nlp/full_nlp.ipynb`](nlp/full_nlp.ipynb) |
+| Forecasting | [`forecasting/full_forecasting.ipynb`](forecasting/full_forecasting.ipynb) |
+| Multimodal | [`multimodal/full_multimodal.ipynb`](multimodal/full_multimodal.ipynb) |
+| Foundation model | [`tabular-foundation/full_foundation.ipynb`](tabular-foundation/full_foundation.ipynb) |
+
+- **Part 1 (EDA)** menulis `eda-output/eda_decisions.json`. **Part 2 (pipeline)** membacanya lewat `EDA_DIR`, jadi semua keputusan `'auto'` tetap berasal dari temuan EDA.
+- **Path data cukup diisi sekali** di Settings Part 1. Pipeline otomatis memakai file yang sudah ditemukan di Part 1.
+- Setting model (pilihan model, tuning, ensemble) ada di cell Settings section *Pipeline Initialization*.
+- Cocok untuk Kaggle: satu notebook, satu kali *Run All*.
+
 ---
 
 ## Cara Kerja Keputusan `'auto'`
@@ -363,6 +380,12 @@ Setiap `.ipynb` dibuat dari skrip builder `build_*.py` di folder yang sama. Untu
 
 ```bash
 python tabular/build_pipeline_tabular.py
+```
+
+Notebook gabungan `full_*.ipynb` dibuat dari notebook EDA dan pipeline, jadi generate ulang setelah mengubah builder mana pun:
+
+```bash
+python build_full_notebooks.py
 ```
 
 Perubahan kecil untuk satu lomba (misal path dan nama kolom) cukup diedit langsung di notebook.

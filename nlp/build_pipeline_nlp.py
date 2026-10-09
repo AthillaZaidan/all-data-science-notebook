@@ -1555,7 +1555,7 @@ cells.append(md(
 
 cells.append(code(
     "TRAIN_FOLDS = list(range(CFG.N_FOLDS)) if CFG.TRAIN_FOLDS in ('all', None) else list(CFG.TRAIN_FOLDS)\n"
-    "HISTORY, KEPT = [], {}\n"
+    "HISTORY, KEPT, FAILED = [], {}, {}\n"
     "for key in ACTIVE:\n"
     "    oof = empty_pred(len(dev))\n"
     "    hold_p = np.zeros(empty_pred(len(hold)).shape)\n"
@@ -1565,7 +1565,13 @@ cells.append(code(
     "    for fold in TRAIN_FOLDS:\n"
     "        tr, va = FOLDS[fold]\n"
     "        seed_everything(CFG.SEED + fold)\n"
-    "        core, preds, hist, scale = run_fold(key, fold, tr, va)\n"
+    "        try:\n"
+    "            core, preds, hist, scale = run_fold(key, fold, tr, va)\n"
+    "        except (OSError, ValueError) as e:\n"
+    "            # weights missing (no internet on Kaggle, a typo in MODEL_REGISTRY): skip the model, keep the pipeline\n"
+    "            FAILED[key] = str(e).splitlines()[0][:160]\n"
+    "            print(f'[warn] {key} skipped: {FAILED[key]}')\n"
+    "            break\n"
     "        HISTORY += hist\n"
     "        oof[va] = preds['va']\n"
     "        fold_scores.append(primary(y_dev[va], preds['va']))\n"
@@ -1580,11 +1586,16 @@ cells.append(code(
     "        gc.collect()\n"
     "        if DEVICE == 'cuda':\n"
     "            torch.cuda.empty_cache()\n"
+    "    if key in FAILED:\n"
+    "        continue\n"
     "    RESULTS[key] = finish_result(key, oof, hold_p, test_p, fold_scores, t0)\n"
     "    cov = RESULTS[key]['covered']\n"
     "    prediction_frame(oof[cov], dev[cov], y_dev[cov]).to_csv(CFG.FINAL_DIR / 'oof' / f'{slug(key)}.csv', index=False)\n"
     "if HISTORY:\n"
-    "    pd.DataFrame(HISTORY).to_csv(CFG.FINAL_DIR / 'training_history.csv', index=False)"
+    "    pd.DataFrame(HISTORY).to_csv(CFG.FINAL_DIR / 'training_history.csv', index=False)\n"
+    "if FAILED:\n"
+    "    note(f'Skipped transformers {list(FAILED)}: their weights could not be loaded. On Kaggle, switch Internet on '\n"
+    "         'in the notebook settings, or attach the model as a dataset and put its path in MODEL_REGISTRY.')"
 ))
 
 cells.append(md(

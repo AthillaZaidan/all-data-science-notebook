@@ -1,0 +1,41 @@
+# Semua library yang dipakai notebook di repo ini (untuk setup lokal).
+# Di Kaggle / Colab tidak perlu: cell %pip di tiap notebook sudah menginstal yang dibutuhkan.
+# Python 3.10 - 3.12 disarankan (PyTorch belum selalu tersedia untuk versi Python terbaru).
+
+# Inti (semua notebook)
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+seaborn
+pyarrow
+openpyxl
+joblib
+
+# Jupyter (lokal)
+jupyterlab
+ipykernel
+
+# Tabular, multimodal, forecasting
+statsmodels
+lightgbm
+xgboost
+catboost
+optuna
+
+# NLP (EDA)
+wordcloud
+vaderSentiment
+
+# NLP, multimodal embedding, computer vision (deep learning)
+torch
+torchvision
+transformers>=4.56
+sentencepiece
+protobuf
+huggingface_hub
+pillow
+
+# Tabular foundation model
+causilo

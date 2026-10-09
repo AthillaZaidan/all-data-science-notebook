@@ -13,6 +13,7 @@ Jadi alurnya selalu **EDA dulu, baru pipeline**. Semua keputusan pipeline (metri
 | NLP | [`nlp/eda_nlp.ipynb`](nlp/eda_nlp.ipynb) | [`nlp/pipeline_nlp.ipynb`](nlp/pipeline_nlp.ipynb) | TF-IDF (word + char) + Linear | IndoBERT, RoBERTa, DeBERTa-v3, ModernBERT, XLM-R, mDeBERTa, dll. |
 | Forecasting | [`forecasting/eda_forecasting.ipynb`](forecasting/eda_forecasting.ipynb) | [`forecasting/pipeline_forecasting.ipynb`](forecasting/pipeline_forecasting.ipynb) | Naive, Seasonal Naive, Moving Average, ETS | LightGBM, XGBoost, CatBoost (global model) |
 | Multimodal (tabular + teks) | [`multimodal/eda_multimodal.ipynb`](multimodal/eda_multimodal.ipynb) | [`multimodal/pipeline_multimodal.ipynb`](multimodal/pipeline_multimodal.ipynb) | Linear / Logistic Regression | LightGBM, XGBoost, CatBoost + TF-IDF, embedding transformer, stacking NLP |
+| Tabular foundation model | pakai EDA tabular | [`tabular-foundation/pipeline_foundation.ipynb`](tabular-foundation/pipeline_foundation.ipynb) | Linear / Logistic Regression | **Causilo** (in-context learning) + LightGBM / XGBoost / CatBoost |
 
 ---
 
@@ -246,6 +247,40 @@ Berlaku untuk pipeline **tabular**, **multimodal**, dan **NLP**.
 - `TUNE_DECISION = True` (default) mengaktifkan tuning di atas. Tuning **hanya pakai prediksi out-of-fold**, lalu dinilai sekali di holdout, jadi skornya tetap jujur.
 - Multi-target di tabular: target pertama dapat analisis lengkap (SHAP, error analysis). Target berikutnya pakai fitur dan fold yang sama, dengan baseline, GBM, blend, dan aturan keputusan masing-masing. Hasilnya `multi_target_metrics.csv`, plus `multilabel_scores.json` (micro / macro / samples F1) untuk multi-label.
 - Format `submission.csv` tetap mengikuti `sample_submission`. Untuk multi-label satu kolom, label digabung lagi dengan separator yang sama.
+
+---
+
+## Tabular Foundation Model (Causilo)
+
+[Causilo](https://github.com/nums-ai/causilo) (Nums AI) adalah *tabular foundation model*: transformer yang dilatih di sekitar 36 juta tabel sintetis. Cara kerjanya *in-context learning*: baris training dipakai sebagai konteks, lalu prediksi keluar dalam satu forward pass. Model ini **tidak dilatih ulang** di data lomba, jadi tidak ada learning rate, early stopping, atau tuning.
+
+`tabular-foundation/pipeline_foundation.ipynb` adalah pipeline tabular yang sama (keputusan EDA, fold, baseline, ensemble, tuning keputusan, ordinal, multi-target, format `sample_submission`), ditambah:
+
+| Setting | Isi |
+|---|---|
+| `MODELS` | default `['causilo', 'lightgbm']`. Causilo dinilai di fold yang sama dan bisa di-blend dengan GBM |
+| `CAUSILO_ESTIMATORS` | anggota ensemble Causilo, `'auto'` = 8 di GPU, 4 di CPU |
+| `CAUSILO_DEVICE` | `'auto'` (CUDA kalau ada), `'cuda'`, `'mps'`, `'cpu'` |
+| `MAX_CONTEXT_ROWS` | batas baris konteks per fit (default 50.000). Data lebih besar disubsample (stratified) |
+| `CONTEXT_CURVE` | kurva skor vs jumlah baris training, Causilo vs GBM. Bukti untuk laporan bahwa prior pretrained membantu di data kecil |
+| `INTERVAL` | prediction interval dari 999 kuantil Causilo (regresi). Coverage dicek di holdout, interval test disimpan ke `test_intervals.csv` |
+| `PERM_IMPORTANCE` | permutation importance untuk Causilo (TreeSHAP tidak berlaku karena tidak ada pohon) |
+
+Hasil uji di data sintetis (CV, tanpa tuning):
+
+| Kasus | Causilo | LightGBM |
+|---|---|---|
+| Regresi (RMSE ↓) | **1.006** | 1.386 |
+| Biner (ROC AUC ↑) | **0.766** | 0.736 |
+| Ordinal (QWK ↑) | **0.869** | 0.852 |
+| Multiclass 5 kelas (macro F1 ↑) | **0.417** | 0.409 |
+
+Catatan:
+
+- **Jalankan EDA tabular dulu** (`tabular/eda_tabular.ipynb`) di folder kerja yang sama, atau arahkan `EDA_DIR` ke `eda-output` yang sudah ada.
+- **Butuh internet saat fit pertama**: checkpoint diunduh dari Hugging Face (`nums-ai/causilo`) dan di-cache. Di Kaggle, aktifkan *Internet* di setting notebook.
+- **GPU sangat disarankan** untuk data di atas ~10 ribu baris. Di CPU, 2.000 baris × 5 fold butuh sekitar 30–45 detik.
+- **Lisensi**: kode Apache-2.0, tapi **bobot model** pakai *Causilo License v1.0* (riset non-komersial diizinkan, penggunaan komersial/produksi butuh lisensi terpisah). Cek dulu aturan lomba soal model pretrained.
 
 ---
 

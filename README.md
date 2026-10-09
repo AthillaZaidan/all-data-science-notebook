@@ -12,7 +12,8 @@ Jadi alurnya selalu **EDA dulu, baru pipeline**. Semua keputusan pipeline (metri
 | Tabular | [`tabular/eda_tabular.ipynb`](tabular/eda_tabular.ipynb) | [`tabular/pipeline_tabular.ipynb`](tabular/pipeline_tabular.ipynb) | Linear / Logistic Regression | LightGBM, XGBoost, CatBoost (+ Optuna) |
 | NLP | [`nlp/eda_nlp.ipynb`](nlp/eda_nlp.ipynb) | [`nlp/pipeline_nlp.ipynb`](nlp/pipeline_nlp.ipynb) | TF-IDF (word + char) + Linear | IndoBERT, RoBERTa, DeBERTa-v3, ModernBERT, XLM-R, mDeBERTa, dll. |
 | Forecasting | [`forecasting/eda_forecasting.ipynb`](forecasting/eda_forecasting.ipynb) | [`forecasting/pipeline_forecasting.ipynb`](forecasting/pipeline_forecasting.ipynb) | Naive, Seasonal Naive, Moving Average, ETS | LightGBM, XGBoost, CatBoost (global model) |
-| Multimodal (tabular + teks) | [`multimodal/eda_multimodal.ipynb`](multimodal/eda_multimodal.ipynb) | [`multimodal/pipeline_multimodal.ipynb`](multimodal/pipeline_multimodal.ipynb) | Linear / Logistic Regression | LightGBM, XGBoost, CatBoost + TF-IDF, embedding transformer, stacking NLP |
+| Multimodal: tabular + teks | [`multimodal/tabular-text/eda_multimodal.ipynb`](multimodal/tabular-text/eda_multimodal.ipynb) | [`multimodal/tabular-text/pipeline_multimodal.ipynb`](multimodal/tabular-text/pipeline_multimodal.ipynb) | Linear / Logistic Regression | LightGBM, XGBoost, CatBoost + TF-IDF, embedding transformer, stacking NLP |
+| Multimodal: forecasting + teks | [`multimodal/forecast-text/eda_forecast_text.ipynb`](multimodal/forecast-text/eda_forecast_text.ipynb) | [`multimodal/forecast-text/pipeline_forecast_text.ipynb`](multimodal/forecast-text/pipeline_forecast_text.ipynb) | Naive, Seasonal Naive, Moving Average, ETS | LightGBM, XGBoost, CatBoost + fitur teks ter-lag (embedding / TF-IDF) |
 | Tabular foundation model | pakai EDA tabular | [`tabular-foundation/pipeline_foundation.ipynb`](tabular-foundation/pipeline_foundation.ipynb) | Linear / Logistic Regression | **Causilo** (in-context learning) + LightGBM / XGBoost / CatBoost |
 
 ---
@@ -82,7 +83,8 @@ Tiap folder juga punya **`full_<domain>.ipynb`**, yaitu EDA dan pipeline digabun
 | Tabular | [`tabular/full_tabular.ipynb`](tabular/full_tabular.ipynb) |
 | NLP | [`nlp/full_nlp.ipynb`](nlp/full_nlp.ipynb) |
 | Forecasting | [`forecasting/full_forecasting.ipynb`](forecasting/full_forecasting.ipynb) |
-| Multimodal | [`multimodal/full_multimodal.ipynb`](multimodal/full_multimodal.ipynb) |
+| Multimodal tabular + teks | [`multimodal/tabular-text/full_multimodal.ipynb`](multimodal/tabular-text/full_multimodal.ipynb) |
+| Multimodal forecasting + teks | [`multimodal/forecast-text/full_forecast_text.ipynb`](multimodal/forecast-text/full_forecast_text.ipynb) |
 | Foundation model | [`tabular-foundation/full_foundation.ipynb`](tabular-foundation/full_foundation.ipynb) |
 
 - **Part 1 (EDA)** menulis `eda-output/eda_decisions.json`. **Part 2 (pipeline)** membacanya lewat `EDA_DIR`, jadi semua keputusan `'auto'` tetap berasal dari temuan EDA.
@@ -301,7 +303,7 @@ Catatan:
 
 ---
 
-## Multimodal (Tabular + Teks)
+## Multimodal: Tabular + Teks (`multimodal/tabular-text/`)
 
 Untuk tabel yang punya kolom angka/kategori **dan** kolom teks bebas (deskripsi produk, ulasan, keluhan, iklan lowongan). Isinya sama dengan notebook tabular, ditambah:
 
@@ -334,16 +336,44 @@ Embedding dihitung sekali per teks unik lalu di-cache di `pipeline-output/cache/
 ### Alur stacking dengan model NLP fine-tuned
 
 1. Jalankan `nlp/pipeline_nlp.ipynb` di data yang sama, dengan `TEXT_COL` = kolom teks, `LABEL_COL` = target, `ID_COL` = kolom ID, dan **`TRAIN_FOLDS = [0, 1, 2, 3, 4]`**. Semua fold wajib dilatih supaya tiap baris punya prediksi out-of-fold. Kalau tidak, stacking-nya bocor dan notebook akan memberi peringatan.
-2. Di `pipeline_multimodal.ipynb`, set `NLP_OOF_DIR = '../nlp/pipeline-output/final'`.
+2. Di `pipeline_multimodal.ipynb`, set `NLP_OOF_DIR = '../../nlp/pipeline-output/final'`.
 3. Prediksi digabung lewat kolom ID yang sama. Tabel ablation menunjukkan seberapa besar tambahan dari model NLP.
 
-### Bagaimana dengan forecasting + teks?
+---
 
-Belum ada notebook khusus, tapi polanya:
+## Multimodal: Forecasting + Teks (`multimodal/forecast-text/`)
 
-1. **Agregasi teks ke level (series, tanggal)**: jumlah dokumen, rata-rata sentimen, proporsi topik, rata-rata embedding (dikompres PCA) per hari/minggu.
-2. **Jadikan eksogen**. Kalau teksnya baru diketahui setelah kejadian (berita, ulasan), fitur ini **harus di-lag** minimal sebesar horizon supaya tidak bocor. Kalau teksnya sudah ada di masa depan (misal deskripsi promo yang sudah dijadwalkan), masukkan sebagai kolom di file test supaya terbaca sebagai `EXOG_KNOWN`.
-3. Simpan hasil agregasi sebagai kolom tambahan di train/test, lalu jalankan `forecasting/pipeline_forecasting.ipynb` seperti biasa.
+Untuk forecasting yang punya teks bertanggal, misalnya berita, pengumuman promo, ulasan, atau postingan media sosial, yang bisa memberi sinyal **sebelum** target berubah.
+
+**Sumber teks** (otomatis dicari):
+
+| Sumber | Contoh | Cara pakai |
+|---|---|---|
+| File teks terpisah di folder dataset | `news.csv` (`date`, `store`, `headline`) | nama file mengandung `news`, `text`, `review`, `tweet`, `post`, `berita`, `ulasan`, atau set `TEXT_*_PATH` |
+| Kolom teks di data utama | `train.csv` punya kolom `deskripsi` per (tanggal, series) | kolom string rata-rata ≥ 3 kata, atau set `TEXT_COL` |
+
+Kalau teks punya kolom ID series (misal `store`), fitur teks dipetakan ke series yang cocok (boleh sebagian ID saja). Kalau tidak, teks dianggap global dan dipakai semua series.
+
+**EDA (`eda_forecast_text.ipynb`)**: section 16 **Text Signal**:
+- volume dokumen per periode vs target
+- heatmap korelasi |r| antara fitur teks di t − lag dan target (sudah di-detrend) di t
+- lag terbaik **yang ≥ horizon**, dibandingkan dengan batas noise 2/√n
+
+Hasilnya `text_lag`, `text_useful`, dan `text_windows` di `eda_decisions.json`.
+
+**Pipeline (`pipeline_forecast_text.ipynb`)**:
+
+| Setting | Isi |
+|---|---|
+| `TEXT_FEATURES` | `'embed'` (transformer `EMBED_MODEL` → PCA, di-cache), `'tfidf'` (TF-IDF → SVD), `'auto'` |
+| `TEXT_DIM` | jumlah komponen teks per dokumen (default 8) |
+| `TEXT_LAG` | `'auto'` = lag dari EDA. **Selalu ≥ horizon**: kalau diisi lebih kecil, dinaikkan otomatis karena teks masa depan belum ada saat forecast dibuat |
+| `TEXT_WINDOWS` | jendela rolling untuk fitur teks ter-lag (default dari EDA: 1, M, 4M) |
+| `TEXT_ABLATION` | backtest ulang model pertama **tanpa** fitur teks, lalu bandingkan per fold. Hasilnya `text_ablation.csv` + grafik + share importance per keluarga fitur |
+
+Fitur teks: jumlah dokumen, panjang rata-rata, dan komponen embedding per (series, periode), di-lag `TEXT_LAG` lalu di-rolling. Jadi semua nilai di baris masa depan berasal dari teks yang sudah terbit di histori, **tanpa kebocoran**.
+
+Kalau tidak ada data, `DEMO_IF_MISSING = True` membuat panel penjualan demo + `news.csv` berisi pengumuman promo yang menaikkan penjualan 30–36 hari kemudian, jadi efek teksnya bisa langsung terlihat.
 
 ---
 

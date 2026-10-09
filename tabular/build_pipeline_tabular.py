@@ -553,12 +553,14 @@ cells.append(code(
     "DECISIONS = []\n"
     "\n"
     "def decide(name, user_value, eda_key, compute, why=''):\n"
+    "    \"\"\"Resolve a setting: explicit user value > EDA decision > computed fallback. `why` may be a function of the value.\"\"\"\n"
     "    if not (isinstance(user_value, str) and user_value == 'auto'):\n"
     "        value, source = user_value, 'user'\n"
     "    elif eda_key and EDA.get(eda_key) is not None:\n"
     "        value, source = EDA[eda_key], 'eda'\n"
     "    else:\n"
     "        value, source = compute(), 'computed'\n"
+    "    why = why(value) if callable(why) else why\n"
     "    DECISIONS.append({'setting': name, 'value': str(value)[:80], 'source': source, 'why': why})\n"
     "    return value\n"
     "\n"
@@ -682,7 +684,7 @@ cells.append(code(
     "print(f'Dropped {n0 - len(df):,} rows with missing target')\n"
     "\n"
     "TASK = decide('TASK', CFG.TASK, 'task', lambda: 'classification' if (not pd.api.types.is_numeric_dtype(df[T]) or df[T].nunique() <= 20) else 'regression',\n"
-    "              'string or few-valued target -> classification')\n"
+    "              lambda v: 'string or few-valued target' if v == 'classification' else 'numeric target with many distinct values')\n"
     "IS_REG = TASK == 'regression'\n"
     "IS_CLF = not IS_REG\n"
     "\n"
@@ -734,7 +736,8 @@ cells.append(md(
 ))
 
 cells.append(code(
-    "DEDUP = bool(decide('DEDUP', CFG.DEDUP, 'dedup', lambda: True, 'identical rows found in the EDA duplicate audit'))\n"
+    "DEDUP = bool(decide('DEDUP', CFG.DEDUP, 'dedup', lambda: True,\n"
+    "                   lambda v: 'identical rows found in the EDA duplicate audit' if v else 'no identical rows in the EDA duplicate audit'))\n"
     "if DEDUP:\n"
     "    key = pd.util.hash_pandas_object(df.astype(str), index=False)\n"
     "    keep = ~key.duplicated().values\n"

@@ -18,6 +18,35 @@ Jadi alurnya selalu **EDA dulu, baru pipeline**. Semua keputusan pipeline (metri
 | CV: klasifikasi gambar | analisis data di section 4 | [`computer-vision/classification/pipeline_cv_classification.ipynb`](computer-vision/classification/pipeline_cv_classification.ipynb) | Linear probe di fitur DINOv3 beku | **DINOv3 ViT-L/16** fine-tuning (LLRD) + blend |
 | CV: segmentasi | analisis data di section 4 | [`computer-vision/segmentation/pipeline_cv_segmentation.ipynb`](computer-vision/segmentation/pipeline_cv_segmentation.ipynb) | Linear head di patch DINOv3 beku | **DINOv3 ViT-L/16** + decoder multi-layer + blend |
 
+### Dokumentasi per folder
+
+Setiap folder punya `README.md` sendiri yang menjelaskan isi kodenya: alur tiap section notebook, arti semua setting beserta default-nya, fungsi-fungsi penting, isi `eda_decisions.json`, file output, dan troubleshooting khusus domain itu.
+
+| Folder | Dokumentasi |
+|---|---|
+| `tabular/` | [tabular/README.md](tabular/README.md) |
+| `nlp/` | [nlp/README.md](nlp/README.md) |
+| `forecasting/` | [forecasting/README.md](forecasting/README.md) |
+| `multimodal/` | [multimodal/README.md](multimodal/README.md): [tabular-text](multimodal/tabular-text/README.md), [forecast-text](multimodal/forecast-text/README.md) |
+| `tabular-foundation/` | [tabular-foundation/README.md](tabular-foundation/README.md) |
+| `computer-vision/` | [computer-vision/README.md](computer-vision/README.md): [classification](computer-vision/classification/README.md), [segmentation](computer-vision/segmentation/README.md) |
+
+**Struktur yang sama di semua folder:**
+
+```
+<folder>/
+├── build_eda_<domain>.py       # skrip builder → menghasilkan eda_<domain>.ipynb
+├── build_pipeline_<domain>.py  # skrip builder → menghasilkan pipeline_<domain>.ipynb
+├── eda_<domain>.ipynb          # notebook EDA (yang dijalankan)
+├── pipeline_<domain>.ipynb     # notebook pipeline (yang dijalankan)
+├── full_<domain>.ipynb         # EDA + pipeline dalam satu notebook (hasil build_full_notebooks.py)
+├── data/                       # (kamu buat sendiri, tidak di-commit) taruh dataset di sini
+├── eda-output/                 # (hasil run) grafik, tabel, eda_decisions.json
+└── pipeline-output/            # (hasil run) baseline/, final/, submission.csv
+```
+
+Notebook dan skrip builder isinya sama. Jalankan notebook-nya; edit builder hanya kalau mau mengubah template secara permanen (lihat [Mengedit Notebook](#mengedit-notebook)).
+
 ---
 
 ## Quick Start
@@ -93,6 +122,124 @@ Tiap folder juga punya **`full_<domain>.ipynb`**, yaitu EDA dan pipeline digabun
 - **Path data cukup diisi sekali** di Settings Part 1. Pipeline otomatis memakai file yang sudah ditemukan di Part 1.
 - Setting model (pilihan model, tuning, ensemble) ada di cell Settings section *Pipeline Initialization*.
 - Cocok untuk Kaggle: satu notebook, satu kali *Run All*.
+
+---
+
+## Setup Lengkap
+
+### Kaggle (paling disarankan untuk lomba)
+
+1. **Buat notebook**: di kompetisi atau dataset, klik *New Notebook*, lalu *File → Import Notebook* dan upload `.ipynb` dari repo ini. Notebook `full_*.ipynb` paling praktis karena EDA dan pipeline jalan dalam satu kali *Run All*.
+2. **Tambahkan data**: *Add Input* → pilih kompetisi/dataset. Data muncul di `/kaggle/input/<slug>/`. Isi `KAGGLE_PATH = '/kaggle/input/<slug>'`, atau biarkan placeholder supaya notebook mencari sendiri di `/kaggle/input`.
+3. **Accelerator** (panel kanan → *Session options*):
+   - Tabular, forecasting, EDA: CPU cukup.
+   - NLP transformer, embedding, Causilo, computer vision: **GPU T4 x2** atau **P100**.
+4. **Internet**: nyalakan (*Session options → Internet on*) kalau notebook mengunduh model dari Hugging Face (NLP, multimodal embedding, Causilo, DINOv3). Akun harus sudah verifikasi nomor HP.
+5. **Secrets** (khusus model gated seperti DINOv3): *Add-ons → Secrets → Add*, beri nama `HF_TOKEN`, isi token Hugging Face, lalu centang notebook-nya.
+6. *Run All*. Hasil ada di `/kaggle/working/` (`eda-output/`, `pipeline-output/`, dan `submission.csv`).
+7. Untuk submit: *Save Version → Save & Run All (Commit)*, lalu dari tab *Output* pilih `submission.csv` → *Submit*.
+
+**Kompetisi tanpa internet (code competition).** Siapkan modelnya dulu sebagai dataset:
+
+1. Di notebook lain yang online, jalankan `snapshot_download` (lihat [Model offline](#model-offline)), atau `model.save_pretrained('/kaggle/working/model')`.
+2. Simpan output notebook itu sebagai dataset (*Output → New Dataset*).
+3. Di notebook submit: *Add Input* dataset tersebut, lalu isi path foldernya ke setting model (`MODEL_REGISTRY`, `EMBED_MODEL`, atau `BACKBONE`).
+
+### Google Colab
+
+1. *File → Upload notebook* (atau buka dari GitHub: *File → Open notebook → GitHub* → `AthillaZaidan/all-data-science-notebook`).
+2. *Runtime → Change runtime type → T4 GPU* kalau butuh GPU.
+3. Data:
+   - **Upload langsung**: ikon folder di kiri → upload ke `/content/data/`. Notebook otomatis mencari di `/content`.
+   - **Google Drive**: jalankan cell berikut sebelum Settings, lalu isi `COLAB_PATH = '/content/drive/MyDrive/<folder>'`.
+     ```python
+     from google.colab import drive
+     drive.mount('/content/drive')
+     ```
+4. Token Hugging Face: ikon kunci (*Secrets*) di kiri → tambah `HF_TOKEN` → aktifkan *Notebook access*.
+5. *Runtime → Run all*. Ingat: file di `/content` hilang saat runtime mati, jadi download `pipeline-output/` atau simpan ke Drive.
+
+### Lokal (Windows / macOS / Linux)
+
+**1. Python.** Pakai Python **3.10–3.12**. Versi yang lebih baru kadang belum punya wheel PyTorch / LightGBM.
+
+```bash
+python --version
+```
+
+**2. Clone repo dan buat virtual environment.**
+
+```bash
+git clone https://github.com/AthillaZaidan/all-data-science-notebook.git
+```
+
+```bash
+cd all-data-science-notebook
+```
+
+```bash
+python -m venv .venv
+```
+
+Aktifkan venv: macOS/Linux `source .venv/bin/activate`, Windows (PowerShell) `.venv\Scripts\Activate.ps1`.
+
+**3. Install library.** Semua sekaligus:
+
+```bash
+pip install -r requirements.txt
+```
+
+Atau cukup yang dibutuhkan domain kamu. Lihat baris `%pip install` di section *Initialization* tiap notebook.
+
+**4. Library sistem.**
+
+- **macOS**: LightGBM dan XGBoost butuh OpenMP.
+  ```bash
+  brew install libomp
+  ```
+- **Linux**: biasanya sudah ada; kalau error `libgomp`, install `libgomp1` lewat package manager.
+- **Windows**: kalau install LightGBM/XGBoost gagal, install *Microsoft Visual C++ Redistributable*.
+
+**5. GPU (opsional).**
+
+- NVIDIA: install PyTorch versi CUDA dari [pytorch.org](https://pytorch.org/get-started/locally/) (pilih OS + CUDA yang sesuai), **sebelum** `pip install -r requirements.txt`.
+- Apple Silicon (M1/M2/M3): PyTorch otomatis memakai `mps`. Cukup untuk EDA, baseline, embedding, Causilo, dan linear probe CV. Fine-tuning transformer/ViT besar tetap lebih baik di GPU NVIDIA (Kaggle/Colab).
+- Cek GPU terdeteksi:
+  ```bash
+  python -c "import torch; print(torch.cuda.is_available(), torch.backends.mps.is_available())"
+  ```
+
+**6. Jalankan.**
+
+```bash
+jupyter lab
+```
+
+Buka notebook dari folder domain, taruh data di `<folder>/data/` (misal `tabular/data/train.csv`), lalu *Run All*. Di VS Code: buka `.ipynb`, pilih kernel `.venv`. Cell `%pip install` boleh di-skip kalau library sudah terinstal.
+
+### Token Hugging Face
+
+Dibutuhkan untuk model **gated**, yaitu DINOv3 (computer vision). Model lain (IndoBERT, e5, Causilo, DINOv2) bisa diunduh tanpa token.
+
+1. Daftar/login di [huggingface.co](https://huggingface.co).
+2. Buka halaman model (misal `facebook/dinov3-vitl16-pretrain-lvd1689m`) → klik setuju lisensi → tunggu status *granted*.
+3. *Settings → Access Tokens → Create new token* (tipe **Read**).
+4. Simpan sebagai `HF_TOKEN`:
+   - **Kaggle**: Add-ons → Secrets
+   - **Colab**: ikon kunci
+   - **Lokal**: environment variable, misal `export HF_TOKEN=hf_...` (macOS/Linux) atau `setx HF_TOKEN hf_...` (Windows)
+
+**Jangan** tulis token langsung di notebook yang di-commit atau di-share.
+
+### Model offline
+
+Model Hugging Face diunduh sekali saat pertama dipakai, lalu disimpan di cache `~/.cache/huggingface/` (bisa dipindah dengan env `HF_HOME`). Setelah itu notebook bisa jalan tanpa internet. Untuk mengunduh semuanya sebelum hari H:
+
+```bash
+python -c "from huggingface_hub import snapshot_download as d; [d(m) for m in ['nums-ai/causilo', 'intfloat/multilingual-e5-base', 'indobenchmark/indobert-base-p1', 'facebook/dinov2-large']]"
+```
+
+Untuk DINOv3, set `HF_TOKEN` dulu, lalu tambahkan `'facebook/dinov3-vitl16-pretrain-lvd1689m'` ke daftar di atas.
 
 ---
 
@@ -487,6 +634,79 @@ python build_full_notebooks.py
 ```
 
 Perubahan kecil untuk satu lomba (misal path dan nama kolom) cukup diedit langsung di notebook.
+
+---
+
+## Troubleshooting
+
+Semua notebook mencetak `[warn] ...` saat ada yang tidak beres, dan sebisa mungkin tetap jalan (model yang gagal dilewati, bukan menghentikan notebook). Baca peringatan di output cell paling atas yang error. Masalah umum dan solusinya:
+
+### Instalasi dan environment
+
+| Gejala | Penyebab | Solusi |
+|---|---|---|
+| `ModuleNotFoundError: No module named 'lightgbm'` (atau library lain) | library belum terinstal di kernel yang dipakai | jalankan cell `%pip install` lalu *Restart kernel*; di lokal pastikan kernel = venv yang benar |
+| `[warn] lightgbm unavailable: ... libomp.dylib` | macOS tanpa OpenMP | `brew install libomp`, restart kernel |
+| `torch` tidak bisa diinstal | versi Python terlalu baru | pakai Python 3.10–3.12 |
+| Error versi `transformers` / `DINOv3ViTModel` tidak ada | `transformers` terlalu lama | `pip install -U "transformers>=4.56"` lalu restart kernel |
+| Setelah `%pip install` masih error import | kernel belum di-restart | *Restart kernel*, lalu *Run All* lagi tanpa cell `%pip` |
+| Tokenizer DeBERTa/XLM-R error `sentencepiece` | library tokenizer belum ada | `pip install sentencepiece protobuf` |
+
+### Data tidak terbaca atau salah tebak kolom
+
+| Gejala | Penyebab | Solusi |
+|---|---|---|
+| `AssertionError: ... not found and no train file was discovered` | path salah dan tidak ada file train di lokasi pencarian | cek output "train / test / sample submission"; isi `*_PATH` dengan folder/file yang benar |
+| File train yang dipakai salah (misal file metadata) | tidak ada file bernama `train*`, jadi diambil file terbesar | isi `LOCAL_PATH` / `KAGGLE_PATH` langsung ke file train |
+| Target / kolom teks / kolom tanggal salah tebak | `'auto'` hanya menebak dari nama dan `sample_submission` | isi eksplisit: `TARGET`, `TEXT_COL`, `LABEL_COL`, `DATE_COL`, `TARGET_COL`, `IMAGE_COL` |
+| CSV terbaca jadi 1 kolom | separator bukan koma | `READ_KWARGS = {'sep': ';'}` (atau `'\t'`) |
+| Karakter aneh / `UnicodeDecodeError` | encoding bukan UTF-8 | `READ_KWARGS = {'encoding': 'latin-1'}` |
+| Kolom ID ikut jadi fitur | nama kolom tidak mirip ID | isi `ID_COLS = ['nama_kolom']` |
+
+### Submission
+
+| Gejala | Penyebab | Solusi |
+|---|---|---|
+| `submission.csv` tidak muncul | tidak ada file test yang ditemukan (`[warn] No test file ...`) | pastikan nama file diawali `test`, atau isi `TEST_*_PATH` |
+| Kolom / urutan submission beda dengan sample | `sample_submission` tidak ditemukan atau ID-nya tidak ada di file test | taruh `sample_submission.csv` di folder yang sama; cek `[warn] sample submission id column ...` |
+| Submit probabilitas padahal diminta label (atau sebaliknya) | format ditebak dari isi sample | set `SUBMISSION_FORMAT = 'label'` atau `'proba'` |
+| `[warn] N sample-submission ids have no prediction` | sebagian ID sample tidak ada di file test | cek apakah file test-nya lengkap / ID-nya beda format (angka vs teks) |
+
+### EDA ↔ pipeline
+
+| Gejala | Penyebab | Solusi |
+|---|---|---|
+| Semua keputusan bersumber `computed`, bukan `eda` | `eda_decisions.json` tidak ditemukan | jalankan EDA dulu di folder yang sama, atau isi `EDA_DIR` ke folder `eda-output` |
+| Keputusan pipeline aneh / kolom tidak ada | `eda-output/` sisa dataset lain | hapus `eda-output/` lalu jalankan ulang EDA |
+| Di Kaggle EDA dan pipeline di notebook terpisah | `eda-output/` tidak ikut | upload `eda-output/` sebagai dataset, lalu `EDA_DIR = '/kaggle/input/<dataset>/eda-output'`; atau pakai `full_*.ipynb` |
+
+### Memori, GPU, dan kecepatan
+
+| Gejala | Penyebab | Solusi |
+|---|---|---|
+| `CUDA out of memory` | batch / panjang token / resolusi terlalu besar | turunkan `BATCH_SIZE` (naikkan `GRAD_ACCUM` supaya batch efektif sama), turunkan `MAX_LENGTH` / `IMG_SIZE`, nyalakan `GRAD_CHECKPOINT = True`, kurangi `UNFREEZE_LAST_N` |
+| Kernel mati / restart sendiri | RAM habis (data besar, plot berat) | kurangi `SAMPLE_N` / `MAX_DOCS` (EDA), set `DEBUG_SAMPLE` untuk uji, tutup notebook lain |
+| Training transformer sangat lambat | jalan di CPU | aktifkan GPU; untuk uji cepat pakai model kecil (`bert-tiny`, `dinov3-vits16`) dan `TRAIN_FOLDS = [0]` |
+| Fine-tuning dilewati (`FINETUNE is False`) | `'auto'` hanya aktif kalau ada CUDA | jalankan di GPU, atau paksa `FINETUNE = True` (lambat di CPU/MPS) |
+| GPU tidak dipakai di Kaggle | accelerator belum dipilih | *Session options → Accelerator → GPU*, lalu restart session |
+| Model gradient boosting tidak memakai GPU | default CPU | `USE_GPU = True` |
+
+### Download model
+
+| Gejala | Penyebab | Solusi |
+|---|---|---|
+| `OSError: ... couldn't connect to huggingface.co` | internet mati (Kaggle) | nyalakan Internet, atau pakai model yang sudah di-cache / di-upload sebagai dataset |
+| `GatedRepoError` / `401` / `403` | model gated (DINOv3) tanpa akses | setujui lisensi di halaman model, isi secret `HF_TOKEN`; tanpa itu notebook otomatis pakai `BACKBONE_FALLBACK` |
+| `[warn] ... skipped` untuk satu model transformer | checkpoint gagal dimuat | notebook lanjut dengan model lain; cek nama checkpoint di `MODEL_REGISTRY` |
+| Causilo error saat fit pertama | tidak ada internet untuk unduh bobot | nyalakan internet sekali, atau unduh dulu (lihat [Model offline](#model-offline)) |
+
+### Lain-lain
+
+| Gejala | Solusi |
+|---|---|
+| Hasil berubah tiap run | `SEED` sudah diatur; perbedaan kecil di GPU wajar (operasi non-deterministik) |
+| Grafik tidak muncul tapi file PNG ada | normal di beberapa viewer; semua grafik juga disimpan di `figures/` |
+| Mau menjalankan ulang dari nol | hapus `eda-output/` dan `pipeline-output/` (termasuk `pipeline-output/cache/`) |
 
 ---
 
